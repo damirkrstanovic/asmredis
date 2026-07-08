@@ -21,6 +21,15 @@ kill $SRV 2>/dev/null
 [ "$echo1" = "24350d0a68656c6c6f0d0a" ]      && echo "PASS echo" || { echo "FAIL echo: $echo1"; exit 1; }
 case "$unk" in "-ERR unknown command 'FOO'"*) echo "PASS unknown";; *) echo "FAIL unknown: $unk"; exit 1;; esac
 
+# --- regression: bulk-length integer overflow must not crash (remote SIGSEGV guard) ---
+./asmredis 7777 & SRV=$!; sleep 0.3
+printf '*1\r\n$18446744073709551614\r\n' | nc -q1 127.0.0.1 7777 >/dev/null 2>&1
+sleep 0.1
+# server must still be alive and answer a fresh PING
+alive=$(printf '*1\r\n$4\r\nPING\r\n' | nc -q1 127.0.0.1 7777 | xxd -p)
+kill $SRV 2>/dev/null
+[ "$alive" = "2b504f4e470d0a" ] && echo "PASS overflow-guard" || { echo "FAIL overflow-guard: server died or wrong reply ($alive)"; exit 1; }
+
 # --- Task 4: SET/GET/DEL semantics ---
 ./asmredis 7777 & SRV=$!; sleep 0.3
 set1=$(printf '*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$3\r\nabc\r\n' | nc -q1 127.0.0.1 7777 | xxd -p)

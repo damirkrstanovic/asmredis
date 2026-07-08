@@ -92,6 +92,11 @@ _read_uint:
     imul    rax, rax, 10
     sub     rcx, '0'
     add     rax, rcx
+    ; Cap at READ_BUF_SIZE: any bulk length / array count larger than the
+    ; read buffer can never be assembled anyway. This also makes the caller's
+    ; `len + 2` computation unable to wrap (guards a remote SIGSEGV).
+    cmp     rax, READ_BUF_SIZE
+    ja      .pe
     inc     r8
     jmp     .d
 .cr:
