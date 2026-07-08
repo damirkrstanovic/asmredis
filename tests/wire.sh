@@ -89,3 +89,14 @@ check ECHO
 kill $SRV 2>/dev/null
 valkey-cli -p 7778 shutdown nosave 2>/dev/null
 [ "$fail" = "0" ] && echo "PASS conformance" || { echo "FAIL conformance"; exit 1; }
+
+# --- Milestone C: concurrency — -c 50 must COMPLETE (milestone A stalled here) ---
+./asmredis 7777 & SRV=$!; sleep 0.3
+timeout 30 valkey-benchmark -p 7777 -t set,get -n 20000 -c 50 -q >/tmp/asmc_bench.txt 2>/dev/null
+bexit=$?
+kill $SRV 2>/dev/null
+if [ "$bexit" = "0" ] && grep -q 'requests per second' /tmp/asmc_bench.txt; then
+  echo "PASS concurrency-c50"
+else
+  echo "FAIL concurrency-c50 (exit=$bexit): $(tr '\r' '\n' < /tmp/asmc_bench.txt | tail -2)"; exit 1
+fi
