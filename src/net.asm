@@ -1,6 +1,6 @@
 %include "syscalls.inc"
 global net_serve
-extern parse_one, dispatch
+extern parse_one, dispatch, emit_protoerr
 extern read_buf, out_buf, out_len
 
 section .rodata
@@ -76,40 +76,91 @@ net_serve:
     test    rax, rax
     js      .accept_loop
     mov     r13, rax             ; conn fd
+    xor     r14, r14             ; r14 = rb_used (bytes buffered in read_buf)
 
+; ---- read more into read_buf at offset rb_used, then drain ----
+; Register roles for the whole connection loop (all survive parse_one/dispatch,
+; both of which preserve rbx and r12-r15):
+;   r12 = listen fd   r13 = conn fd   r14 = rb_used   r15 = consumed (scratch)
 .client_loop:
+    mov     rdx, READ_BUF_SIZE
+    sub     rdx, r14             ; space = READ_BUF_SIZE - rb_used
+    jle     .client_done         ; buffer full without a complete command -> give up
     mov     rax, SYS_read
     mov     rdi, r13
     lea     rsi, [rel read_buf]
-    mov     rdx, READ_BUF_SIZE
-    syscall
+    add     rsi, r14             ; read into read_buf + rb_used (APPEND, don't overwrite)
+    syscall                      ; rdx already = space
     test    rax, rax
-    jle     .client_done         ; EOF or error
-    ; Drain every COMPLETE command already in the buffer, batching replies.
-    ; (Task 4 assumes commands aren't split across reads; a partial tail is
-    ;  dropped — Task 5 adds partial-read/pipelining hardening.)
-    lea     r14, [rel read_buf]  ; cursor
-    lea     r15, [r14 + rax]     ; end = read_buf + bytes_read
+    jle     .client_done         ; 0=peer closed, <0=error
+    add     r14, rax             ; rb_used += n
     mov     qword [rel out_len], 0
-.parse_loop:
-    cmp     r14, r15
-    jae     .flush               ; consumed all bytes
-    mov     rdi, r14
-    mov     rsi, r15
-    sub     rsi, r14             ; remaining bytes
+
+; Drain every COMPLETE command currently buffered, batching replies. After each
+; consumed command the remaining bytes are compacted to the front of read_buf so
+; parse_one always starts at read_buf.
+.drain:
+    lea     rdi, [rel read_buf]
+    mov     rsi, r14             ; rb_used
     call    parse_one            ; rax=status, rdx=consumed
     test    rax, rax
-    jnz     .flush               ; NEED_MORE / PROTOERR: emit what we have
-    add     r14, rdx             ; advance past the parsed command
-    call    dispatch             ; appends this command's reply to out_buf
-    jmp     .parse_loop
-.flush:
+    jz      .ok
+    cmp     rax, 1
+    je      .need_more
+    ; PROTOERR: flush any pending replies + the error, then CLOSE.
+    call    emit_protoerr        ; appends "-ERR Protocol error\r\n"
+    mov     rdx, [rel out_len]
     mov     rax, SYS_write
     mov     rdi, r13
     lea     rsi, [rel out_buf]
-    mov     rdx, [rel out_len]
     syscall
+    jmp     .client_done
+
+.need_more:
+    ; Partial command: keep the buffered bytes, flush replies, read more.
+    mov     rdx, [rel out_len]
+    test    rdx, rdx
+    jz      .client_loop
+    mov     rax, SYS_write
+    mov     rdi, r13
+    lea     rsi, [rel out_buf]
+    syscall
+    mov     qword [rel out_len], 0
     jmp     .client_loop
+
+.ok:
+    mov     r15, rdx             ; save consumed across dispatch (r15 preserved)
+    call    dispatch             ; appends this command's reply to out_buf
+    sub     r14, r15             ; rb_used -= consumed
+    jnz     .compact
+    ; Buffer drained: flush replies (if any) and read again.
+    mov     rdx, [rel out_len]
+    test    rdx, rdx
+    jz      .client_loop
+    mov     rax, SYS_write
+    mov     rdi, r13
+    lea     rsi, [rel out_buf]
+    syscall
+    mov     qword [rel out_len], 0
+    jmp     .client_loop
+
+.compact:
+    ; memmove(read_buf, read_buf+consumed, rb_used). dest<src -> forward rep movsb.
+    lea     rdi, [rel read_buf]  ; dest
+    lea     rsi, [rdi + r15]     ; src = read_buf + consumed
+    mov     rcx, r14             ; rb_used bytes remaining
+    rep     movsb
+    ; Overflow guard: flush before out_buf could overflow on the next reply.
+    mov     rax, [rel out_len]
+    cmp     rax, OUT_FLUSH_HI
+    jb      .drain
+    mov     rdx, rax
+    mov     rax, SYS_write
+    mov     rdi, r13
+    lea     rsi, [rel out_buf]
+    syscall
+    mov     qword [rel out_len], 0
+    jmp     .drain
 
 .client_done:
     mov     rax, SYS_close

@@ -4,6 +4,7 @@ extern argc, argv_ptrs, argv_lens
 extern to_upper_buf, memcmp_n
 extern reply_simple, reply_bulk, reply_null, reply_int, append_raw
 extern ks_get, ks_set, ks_del
+extern emit_wrongargs
 
 section .rodata
 s_pong:     db "PONG"
@@ -22,6 +23,10 @@ uk_mid_len  equ $ - uk_mid
 ap:         db "'"
 ap_sp:      db "' "
 crlf2:      db 13, 10
+lc_set:     db "set"
+lc_get:     db "get"
+lc_del:     db "del"
+lc_echo:    db "echo"
 
 section .bss
 cmd_upper:  resb 16
@@ -101,16 +106,23 @@ cmd_ping:
 
 cmd_echo:
     cmp     qword [rel argc], 2
-    jne     emit_unknown                ; wrong argc -> unknown for now (Task 5 refines)
+    jne     .wa
     mov     rdi, [rel argv_ptrs + 8]
     mov     rsi, [rel argv_lens + 8]
     call    reply_bulk
+    ret
+.wa:
+    lea     rdi, [rel lc_echo]
+    mov     rsi, 4
+    sub     rsp, 8                      ; entered at rsp%16==8 -> align call to 0
+    call    emit_wrongargs
+    add     rsp, 8
     ret
 
 ; cmd_set: SET key value -> +OK\r\n. Copies key+val into the arena.
 cmd_set:
     cmp     qword [rel argc], 3
-    jne     emit_unknown                ; wrong argc (Task 5 refines the message)
+    jne     .wa
     sub     rsp, 8                      ; align call sites to rsp%16==0
     mov     rdi, [rel argv_ptrs + 8]    ; key ptr
     mov     rsi, [rel argv_lens + 8]    ; key len
@@ -122,11 +134,18 @@ cmd_set:
     call    reply_simple
     add     rsp, 8
     ret
+.wa:
+    lea     rdi, [rel lc_set]
+    mov     rsi, 3
+    sub     rsp, 8                      ; entered at rsp%16==8 -> align call to 0
+    call    emit_wrongargs
+    add     rsp, 8
+    ret
 
 ; cmd_get: GET key -> bulk value or $-1 on miss.
 cmd_get:
     cmp     qword [rel argc], 2
-    jne     emit_unknown
+    jne     .wa
     sub     rsp, 8
     mov     rdi, [rel argv_ptrs + 8]
     mov     rsi, [rel argv_lens + 8]
@@ -142,17 +161,31 @@ cmd_get:
     call    reply_null
     add     rsp, 8
     ret
+.wa:
+    lea     rdi, [rel lc_get]
+    mov     rsi, 3
+    sub     rsp, 8                      ; entered at rsp%16==8 -> align call to 0
+    call    emit_wrongargs
+    add     rsp, 8
+    ret
 
 ; cmd_del: DEL key -> :1 if deleted, :0 if absent.
 cmd_del:
     cmp     qword [rel argc], 2
-    jne     emit_unknown
+    jne     .wa
     sub     rsp, 8
     mov     rdi, [rel argv_ptrs + 8]
     mov     rsi, [rel argv_lens + 8]
     call    ks_del                      ; rax = 1 or 0
     mov     rdi, rax
     call    reply_int
+    add     rsp, 8
+    ret
+.wa:
+    lea     rdi, [rel lc_del]
+    mov     rsi, 3
+    sub     rsp, 8                      ; entered at rsp%16==8 -> align call to 0
+    call    emit_wrongargs
     add     rsp, 8
     ret
 

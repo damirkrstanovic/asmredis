@@ -26,6 +26,10 @@
 %define ARENA_SIZE      (64*1024*1024)
 %define READ_BUF_SIZE   16384
 %define OUT_BUF_SIZE    65536
+; Flush out_buf once it grows past this, leaving room for one more max reply.
+; A single reply is bounded by READ_BUF_SIZE (payload lives in read_buf) plus a
+; small framing budget (64), so this guarantees no write past OUT_BUF_SIZE.
+%define OUT_FLUSH_HI    (OUT_BUF_SIZE - READ_BUF_SIZE - 64)
 %define MAX_ARGS        128
 %define NBUCKETS        1024
 %define BUCKET_MASK     1023

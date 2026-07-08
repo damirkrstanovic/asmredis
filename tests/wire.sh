@@ -41,3 +41,15 @@ chain=$(printf '*3\r\n$3\r\nSET\r\n$1\r\nb\r\n$1\r\n1\r\n*3\r\n$3\r\nSET\r\n$2\r
 kill $SRV 2>/dev/null
 exp="2b4f4b0d0a2b4f4b0d0a2b4f4b0d0a24310d0a310d0a24310d0a320d0a24310d0a330d0a3a310d0a242d310d0a24310d0a310d0a24310d0a330d0a"
 [ "$chain" = "$exp" ] && echo "PASS chain" || { echo "FAIL chain: $chain"; exit 1; }
+
+# --- Task 5: pipelining, split reads, protocol error, wrong argc ---
+./asmredis 7777 & SRV=$!; sleep 0.3
+pipe=$(printf '*1\r\n$4\r\nPING\r\n*1\r\n$4\r\nPING\r\n' | nc -q1 127.0.0.1 7777 | xxd -p | tr -d '\n')
+split=$( { printf '*3\r\n$3\r\nSET\r\n$1\r\nk\r\n'; sleep 0.3; printf '$3\r\nabc\r\n'; } | nc -q1 127.0.0.1 7777 | xxd -p | tr -d '\n')
+perr=$(printf '@garbage\r\n' | nc -q1 127.0.0.1 7777 | tr -d '\r\n')
+wa=$(printf '*1\r\n$3\r\nSET\r\n' | nc -q1 127.0.0.1 7777 | tr -d '\r\n')
+kill $SRV 2>/dev/null
+[ "$pipe" = "2b504f4e470d0a2b504f4e470d0a" ] && echo "PASS pipeline" || { echo "FAIL pipeline: $pipe"; exit 1; }
+[ "$split" = "2b4f4b0d0a" ]                  && echo "PASS split"    || { echo "FAIL split: $split"; exit 1; }
+[ "$perr" = "-ERR Protocol error" ]          && echo "PASS protoerr" || { echo "FAIL protoerr: $perr"; exit 1; }
+[ "$wa" = "-ERR wrong number of arguments for 'set' command" ] && echo "PASS wrongargs" || { echo "FAIL wrongargs: $wa"; exit 1; }
