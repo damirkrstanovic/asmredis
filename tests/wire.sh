@@ -53,3 +53,30 @@ kill $SRV 2>/dev/null
 [ "$split" = "2b4f4b0d0a" ]                  && echo "PASS split"    || { echo "FAIL split: $split"; exit 1; }
 [ "$perr" = "-ERR Protocol error" ]          && echo "PASS protoerr" || { echo "FAIL protoerr: $perr"; exit 1; }
 [ "$wa" = "-ERR wrong number of arguments for 'set' command" ] && echo "PASS wrongargs" || { echo "FAIL wrongargs: $wa"; exit 1; }
+
+# --- Task 6: full conformance diff against valkey oracle ---
+valkey-server --port 7778 --save "" --appendonly no --daemonize yes --logfile /tmp/vk-oracle.log --dir /tmp
+./asmredis 7777 & SRV=$!; sleep 0.3
+fail=0
+check() { m=$(valkey-cli -p 7777 "$@"); v=$(valkey-cli -p 7778 "$@"); if [ "$m" != "$v" ]; then echo "DIFF [$*] mine=<$m> valkey=<$v>"; fail=1; fi; }
+check PING
+check PING hello
+check ECHO hello
+check SET foo bar
+check GET foo
+check GET missing
+check SET foo baz
+check GET foo
+check DEL foo
+check DEL foo
+check SET a 1
+check SET b 2
+check GET a
+check GET b
+check SET
+check GET
+check DEL
+check ECHO
+kill $SRV 2>/dev/null
+valkey-cli -p 7778 shutdown nosave 2>/dev/null
+[ "$fail" = "0" ] && echo "PASS conformance" || { echo "FAIL conformance"; exit 1; }

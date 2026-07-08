@@ -23,7 +23,12 @@ run: $(BIN)
 test: $(BIN)
 	bash tests/wire.sh
 
+bench: $(BIN)
+	@./$(BIN) 7777 & echo $$! > /tmp/asmredis.pid; sleep 0.3; \
+	valkey-benchmark -p 7777 -t set,get -n 10000 -q -c 1 ; \
+	kill $$(cat /tmp/asmredis.pid)
+
 clean:
 	rm -rf build $(BIN)
 
-.PHONY: all run test clean
+.PHONY: all run test bench clean
