@@ -16,7 +16,8 @@ net_serve:
     push    r12
     push    r13
     push    r14
-    push    r15
+    ; 3 pushes keep rsp 16-aligned at the call sites below (SysV ABI).
+    ; r15 is used only as within-iteration scratch and never needs saving.
     mov     r14w, di             ; save port (16-bit)
 
     ; socket(AF_INET, SOCK_STREAM, 0)
