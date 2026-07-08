@@ -1,6 +1,8 @@
 %include "syscalls.inc"
 
 global _start
+extern net_serve
+extern atoi_port
 
 section .rodata
 banner:      db "asmredis", 10
@@ -26,6 +28,15 @@ _start:
     mov     rax, SYS_exit
     syscall
 .no_banner:
+    mov     rdi, PORT_DEFAULT
+    mov     rax, [rsp]           ; argc
+    cmp     rax, 2
+    jl      .have_port
+    mov     rdi, [rsp+16]        ; argv[1] ptr
+    call    atoi_port            ; rax = port
+    mov     rdi, rax
+.have_port:
+    call    net_serve            ; never returns
     xor     rdi, rdi
     mov     rax, SYS_exit
     syscall
