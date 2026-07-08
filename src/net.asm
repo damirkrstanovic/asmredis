@@ -85,17 +85,25 @@ net_serve:
     syscall
     test    rax, rax
     jle     .client_done         ; EOF or error
-    mov     r15, rax             ; bytes read
-
+    ; Drain every COMPLETE command already in the buffer, batching replies.
+    ; (Task 4 assumes commands aren't split across reads; a partial tail is
+    ;  dropped — Task 5 adds partial-read/pipelining hardening.)
+    lea     r14, [rel read_buf]  ; cursor
+    lea     r15, [r14 + rax]     ; end = read_buf + bytes_read
     mov     qword [rel out_len], 0
-    lea     rdi, [rel read_buf]
+.parse_loop:
+    cmp     r14, r15
+    jae     .flush               ; consumed all bytes
+    mov     rdi, r14
     mov     rsi, r15
-    call    parse_one
+    sub     rsi, r14             ; remaining bytes
+    call    parse_one            ; rax=status, rdx=consumed
     test    rax, rax
-    jnz     .client_done         ; NEED_MORE / PROTOERR: close (Task 5 hardens)
-
-    call    dispatch
-
+    jnz     .flush               ; NEED_MORE / PROTOERR: emit what we have
+    add     r14, rdx             ; advance past the parsed command
+    call    dispatch             ; appends this command's reply to out_buf
+    jmp     .parse_loop
+.flush:
     mov     rax, SYS_write
     mov     rdi, r13
     lea     rsi, [rel out_buf]

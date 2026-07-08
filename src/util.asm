@@ -1,6 +1,7 @@
 %include "syscalls.inc"
 global atoi_port
 global itoa_u, memcmp_n, to_upper_buf
+global fnv1a
 
 section .text
 ; rdi = ptr to NUL-terminated decimal string -> rax = value
@@ -78,6 +79,22 @@ to_upper_buf:
     sub     al, 32
     mov     [rdi], al
 .skip:
+    inc     rdi
+    dec     rsi
+    jnz     .loop
+.done:
+    ret
+
+; fnv1a: rdi=ptr, rsi=len -> rax=64-bit FNV-1a hash. Clobbers rcx, r8.
+fnv1a:
+    mov     rax, 0xcbf29ce484222325
+    mov     r8, 0x100000001b3
+    test    rsi, rsi
+    je      .done
+.loop:
+    movzx   rcx, byte [rdi]
+    xor     rax, rcx
+    imul    rax, r8
     inc     rdi
     dec     rsi
     jnz     .loop

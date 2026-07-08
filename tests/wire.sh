@@ -20,3 +20,24 @@ kill $SRV 2>/dev/null
 [ "$ping" = "2b504f4e470d0a" ]              && echo "PASS ping" || { echo "FAIL ping: $ping"; exit 1; }
 [ "$echo1" = "24350d0a68656c6c6f0d0a" ]      && echo "PASS echo" || { echo "FAIL echo: $echo1"; exit 1; }
 case "$unk" in "-ERR unknown command 'FOO'"*) echo "PASS unknown";; *) echo "FAIL unknown: $unk"; exit 1;; esac
+
+# --- Task 4: SET/GET/DEL semantics ---
+./asmredis 7777 & SRV=$!; sleep 0.3
+set1=$(printf '*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$3\r\nabc\r\n' | nc -q1 127.0.0.1 7777 | xxd -p)
+geth=$(printf '*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$3\r\nabc\r\n*2\r\n$3\r\nGET\r\n$1\r\nk\r\n' | nc -q1 127.0.0.1 7777 | xxd -p)
+getm=$(printf '*2\r\n$3\r\nGET\r\n$4\r\nnope\r\n' | nc -q1 127.0.0.1 7777 | xxd -p)
+del=$(printf '*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$3\r\nabc\r\n*2\r\n$3\r\nDEL\r\n$1\r\nk\r\n*2\r\n$3\r\nDEL\r\n$1\r\nk\r\n' | nc -q1 127.0.0.1 7777 | xxd -p)
+kill $SRV 2>/dev/null
+[ "$set1" = "2b4f4b0d0a" ]                   && echo "PASS set"      || { echo "FAIL set: $set1"; exit 1; }
+[ "$geth" = "2b4f4b0d0a24330d0a6162630d0a" ]  && echo "PASS get-hit"  || { echo "FAIL get-hit: $geth"; exit 1; }
+[ "$getm" = "242d310d0a" ]                    && echo "PASS get-miss" || { echo "FAIL get-miss: $getm"; exit 1; }
+[ "$del" = "2b4f4b0d0a3a310d0a3a300d0a" ]     && echo "PASS del"      || { echo "FAIL del: $del"; exit 1; }
+
+# --- Task 4b: hash-chain integrity in a SINGLE connection ---
+# SET b 1, SET jz 2, SET se 3, GET b/jz/se, DEL jz (middle-of-chain unlink),
+# GET jz (miss), GET b, GET se. All in one connection (shared keyspace state).
+./asmredis 7777 & SRV=$!; sleep 0.3
+chain=$(printf '*3\r\n$3\r\nSET\r\n$1\r\nb\r\n$1\r\n1\r\n*3\r\n$3\r\nSET\r\n$2\r\njz\r\n$1\r\n2\r\n*3\r\n$3\r\nSET\r\n$2\r\nse\r\n$1\r\n3\r\n*2\r\n$3\r\nGET\r\n$1\r\nb\r\n*2\r\n$3\r\nGET\r\n$2\r\njz\r\n*2\r\n$3\r\nGET\r\n$2\r\nse\r\n*2\r\n$3\r\nDEL\r\n$2\r\njz\r\n*2\r\n$3\r\nGET\r\n$2\r\njz\r\n*2\r\n$3\r\nGET\r\n$1\r\nb\r\n*2\r\n$3\r\nGET\r\n$2\r\nse\r\n' | nc -q1 127.0.0.1 7777 | xxd -p | tr -d '\n')
+kill $SRV 2>/dev/null
+exp="2b4f4b0d0a2b4f4b0d0a2b4f4b0d0a24310d0a310d0a24310d0a320d0a24310d0a330d0a3a310d0a242d310d0a24310d0a310d0a24310d0a330d0a"
+[ "$chain" = "$exp" ] && echo "PASS chain" || { echo "FAIL chain: $chain"; exit 1; }

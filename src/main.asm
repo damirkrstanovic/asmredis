@@ -3,6 +3,7 @@
 global _start
 extern net_serve
 extern atoi_port
+extern arena_init
 
 section .rodata
 banner:      db "asmredis", 10
@@ -36,6 +37,9 @@ _start:
     call    atoi_port            ; rax = port
     mov     rdi, rax
 .have_port:
+    push    rdi                  ; preserve port across arena_init
+    call    arena_init           ; mmap the keyspace arena
+    pop     rdi
     call    net_serve            ; never returns
     xor     rdi, rdi
     mov     rax, SYS_exit
@@ -49,3 +53,5 @@ out_len:    resq 1
 argc:       resq 1
 argv_ptrs:  resq MAX_ARGS
 argv_lens:  resq MAX_ARGS
+global buckets
+buckets:    resq NBUCKETS
