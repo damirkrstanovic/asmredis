@@ -1,15 +1,14 @@
 %include "syscalls.inc"
 global net_serve
+extern parse_one, dispatch
+extern read_buf, out_buf, out_len
 
 section .rodata
-pong:      db "+PONG", 13, 10
-pong_len:  equ $ - pong
-err_bind:  db "bind failed", 10
+err_bind:     db "bind failed", 10
 err_bind_len: equ $ - err_bind
 
 section .bss
 sockaddr:  resb 16           ; struct sockaddr_in
-reqbuf:    resb 512           ; scratch: drain client request before reply
 
 section .text
 ; rdi = port number (host order)
@@ -17,6 +16,7 @@ net_serve:
     push    r12
     push    r13
     push    r14
+    push    r15
     mov     r14w, di             ; save port (16-bit)
 
     ; socket(AF_INET, SOCK_STREAM, 0)
@@ -76,20 +76,33 @@ net_serve:
     js      .accept_loop
     mov     r13, rax             ; conn fd
 
-    ; drain the incoming request so close() sends FIN, not RST
-    ; (unread data at close truncates our reply on the client side)
+.client_loop:
     mov     rax, SYS_read
     mov     rdi, r13
-    lea     rsi, [rel reqbuf]
-    mov     rdx, 512
+    lea     rsi, [rel read_buf]
+    mov     rdx, READ_BUF_SIZE
     syscall
+    test    rax, rax
+    jle     .client_done         ; EOF or error
+    mov     r15, rax             ; bytes read
+
+    mov     qword [rel out_len], 0
+    lea     rdi, [rel read_buf]
+    mov     rsi, r15
+    call    parse_one
+    test    rax, rax
+    jnz     .client_done         ; NEED_MORE / PROTOERR: close (Task 5 hardens)
+
+    call    dispatch
 
     mov     rax, SYS_write
     mov     rdi, r13
-    lea     rsi, [rel pong]
-    mov     rdx, pong_len
+    lea     rsi, [rel out_buf]
+    mov     rdx, [rel out_len]
     syscall
+    jmp     .client_loop
 
+.client_done:
     mov     rax, SYS_close
     mov     rdi, r13
     syscall

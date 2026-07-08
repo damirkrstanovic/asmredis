@@ -40,3 +40,12 @@ _start:
     xor     rdi, rdi
     mov     rax, SYS_exit
     syscall
+
+section .bss
+global read_buf, out_buf, out_len, argc, argv_ptrs, argv_lens
+read_buf:   resb READ_BUF_SIZE
+out_buf:    resb OUT_BUF_SIZE
+out_len:    resq 1
+argc:       resq 1
+argv_ptrs:  resq MAX_ARGS
+argv_lens:  resq MAX_ARGS
