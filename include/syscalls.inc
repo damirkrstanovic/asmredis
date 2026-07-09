@@ -33,3 +33,35 @@
 %define MAX_ARGS        128
 %define NBUCKETS        1024
 %define BUCKET_MASK     1023
+
+; ---- milestone C: epoll / non-blocking ----
+%define SYS_epoll_create1  291
+%define SYS_epoll_ctl      233
+%define SYS_epoll_wait     232
+%define SYS_accept4        288
+%define EPOLLIN            0x1
+%define EPOLLOUT           0x4
+%define EPOLLERR           0x8
+%define EPOLLHUP           0x10
+%define EPOLL_CTL_ADD      1
+%define EPOLL_CTL_DEL      2
+%define EPOLL_CTL_MOD      3
+%define EAGAIN             11
+%define EINTR              4
+%define SOCK_NONBLOCK      0x800
+%define MAX_CONNS          1024
+%define CONN_BUF_SIZE      16384        ; per-conn READ buffer slot
+%define CONN_BUF_SHIFT     14
+; Per-conn WRITE buffer slot. Must exceed the largest single reply so the
+; EPOLLOUT backpressure stash can never overflow into the next fd's slot.
+; Max reply is the unknown-command error re-emitting a ~16370-byte argument
+; plus ~53 bytes of framing = ~16423 (< READ_BUF_SIZE+64=16448). 32768 gives
+; ample margin and stays a power of two so addressing is a single shift.
+%define WRITE_BUF_SIZE     32768
+%define WRITE_BUF_SHIFT    15
+%define CONN_STATE_SZ      32
+%define CONN_STATE_SHIFT   5
+%define MAX_EVENTS         256
+%define EV_SIZE            12
+%define ST_IN_USE          1
+%define ST_WATCH_OUT       2

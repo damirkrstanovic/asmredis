@@ -89,3 +89,46 @@ check ECHO
 kill $SRV 2>/dev/null
 valkey-cli -p 7778 shutdown nosave 2>/dev/null
 [ "$fail" = "0" ] && echo "PASS conformance" || { echo "FAIL conformance"; exit 1; }
+
+# --- Milestone C: concurrency — -c 50 must COMPLETE (milestone A stalled here) ---
+./asmredis 7777 & SRV=$!; sleep 0.3
+timeout 30 valkey-benchmark -p 7777 -t set,get -n 20000 -c 50 -q >/tmp/asmc_bench.txt 2>/dev/null
+bexit=$?
+kill $SRV 2>/dev/null
+if [ "$bexit" = "0" ] && grep -q 'requests per second' /tmp/asmc_bench.txt; then
+  echo "PASS concurrency-c50"
+else
+  echo "FAIL concurrency-c50 (exit=$bexit): $(tr '\r' '\n' < /tmp/asmc_bench.txt | tail -2)"; exit 1
+fi
+
+# --- Milestone C: backpressure / EPOLLOUT path (slow reader, large-ish value) ---
+./asmredis 7777 & SRV=$!; sleep 0.3
+bigval=$(python3 -c "print('x'*4000, end='')")
+if python3 tests/slow_reader.py 7777 500 "$bigval" >/tmp/asmc_slow.txt 2>&1; then
+  echo "PASS backpressure"
+else
+  echo "FAIL backpressure: $(cat /tmp/asmc_slow.txt)"; kill $SRV 2>/dev/null; exit 1
+fi
+kill $SRV 2>/dev/null
+
+# --- Milestone C: large (>16KB) replies under backpressure must not overflow write buffer ---
+./asmredis 7777 & SRV=$!; sleep 0.3
+if python3 tests/big_reply.py 7777 100 >/tmp/asmc_big.txt 2>&1; then
+  echo "PASS big-reply-backpressure"
+else
+  echo "FAIL big-reply-backpressure: $(cat /tmp/asmc_big.txt)"; kill $SRV 2>/dev/null; exit 1
+fi
+kill $SRV 2>/dev/null
+
+# --- Milestone C: heavier concurrency (-c 200) still completes ---
+./asmredis 7777 & SRV=$!; sleep 0.3
+timeout 40 valkey-benchmark -p 7777 -t set,get -n 40000 -c 200 -q >/tmp/asmc_b200.txt 2>/dev/null
+b2=$?
+# --- fd-leak: many short-lived connections; server fd count returns to baseline ---
+base=$(ls /proc/$SRV/fd 2>/dev/null | wc -l)
+for i in $(seq 1 200); do valkey-cli -p 7777 PING >/dev/null 2>&1; done
+sleep 0.3
+after=$(ls /proc/$SRV/fd 2>/dev/null | wc -l)
+kill $SRV 2>/dev/null
+if [ "$b2" = "0" ] && grep -q 'requests per second' /tmp/asmc_b200.txt; then echo "PASS concurrency-c200"; else echo "FAIL concurrency-c200 (exit=$b2)"; exit 1; fi
+if [ "$after" -le $((base + 3)) ]; then echo "PASS no-fd-leak (base=$base after=$after)"; else echo "FAIL no-fd-leak (base=$base after=$after)"; exit 1; fi
