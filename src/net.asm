@@ -11,6 +11,8 @@ section .bss
 sockaddr:    resb 16                       ; struct sockaddr_in
 read_base:   resq 1                        ; base of per-conn read buffers
 write_base:  resq 1                        ; base of per-conn write buffers
+g_epfd:      resq 1                        ; epfd (ep_ctl reads it here, r12 is
+                                           ; clobbered as scratch by drain/flush)
 conn_state:  resb MAX_CONNS*CONN_STATE_SZ  ; +0 rb_used +8 wr_pos +16 wr_len +24 flags
 ev_scratch:  resb 16                       ; scratch epoll_event for epoll_ctl
 events:      resb MAX_EVENTS*EV_SIZE       ; epoll_wait output (12-byte stride!)
@@ -85,7 +87,9 @@ net_serve:
     syscall
     test    rax, rax
     js      net_fail
-    mov     r12, rax                     ; epfd
+    mov     r12, rax                     ; epfd (loop uses r12 for epoll_wait)
+    mov     [rel g_epfd], rax            ; and a stable copy for ep_ctl, since
+                                         ; drain/flush_reply clobber r12 as scratch
 
     ; mmap two per-conn buffer regions
     call    map_region
@@ -122,27 +126,35 @@ net_serve:
 
     cmp     ebx, r13d                    ; listener?
     je      .ev_accept
-    test    ebp, (EPOLLHUP | EPOLLERR)
-    jnz     .ev_close
+    ; Honor EPOLLIN BEFORE EPOLLHUP/EPOLLERR so buffered input is drained
+    ; before we tear the connection down on a half-close. EPOLLIN and EPOLLOUT
+    ; are never both armed for a conn (interest is toggled, never both).
     test    ebp, EPOLLIN
-    jnz     .ev_read
+    jz      .ev_maybe_write
+    mov     edi, ebx
+    call    on_readable                  ; may close on EOF / proto error
+    jmp     .ev_hup
+.ev_maybe_write:
     test    ebp, EPOLLOUT
-    jnz     .ev_write
-    jmp     .next
-.ev_accept:
-    call    on_accept
-    jmp     .next
-.ev_close:
+    jz      .ev_hup
+    mov     edi, ebx
+    call    on_writable                  ; may close on write error
+.ev_hup:
+    test    ebp, (EPOLLHUP | EPOLLERR)
+    jz      .next
+    ; Only close if the slot is still in use — on_readable/on_writable may
+    ; have already closed it (avoids double-close of a reused fd).
+    lea     rax, [rel conn_state]
+    mov     rcx, rbx
+    shl     rcx, CONN_STATE_SHIFT
+    add     rax, rcx
+    test    qword [rax+24], ST_IN_USE
+    jz      .next
     mov     edi, ebx
     call    close_conn
     jmp     .next
-.ev_read:
-    mov     edi, ebx
-    call    on_readable
-    jmp     .next
-.ev_write:
-    mov     edi, ebx
-    call    on_writable
+.ev_accept:
+    call    on_accept
 .next:
     inc     r14
     jmp     .each
@@ -178,8 +190,10 @@ map_region:
     ret
 
 ; ============================================================================
-; ep_ctl(rdi=fd, rsi=op, rdx=mask): epoll_ctl on epfd(r12) with a fresh event.
+; ep_ctl(rdi=fd, rsi=op, rdx=mask): epoll_ctl on epfd with a fresh event.
 ; Correct kernel ABI: rdi=epfd, rsi=op, rdx=fd, r10=&event.
+; epfd is read from [g_epfd] (NOT r12): drain/flush_reply use r12 as scratch,
+; so relying on r12 here would pass garbage and fail with EBADF.
 ; Preserves callee-saved regs.
 ; ============================================================================
 ep_ctl:
@@ -187,7 +201,7 @@ ep_ctl:
     mov     [rax], edx                   ; events @ +0
     mov     [rax+4], edi                 ; data.fd @ +4
     mov     rdx, rdi                     ; fd  -> rdx
-    mov     rdi, r12                     ; epfd
+    mov     rdi, [rel g_epfd]            ; epfd
     mov     r10, rax                     ; &event
     mov     rax, SYS_epoll_ctl           ; rsi (op) already in place
     syscall
@@ -362,17 +376,21 @@ drain:
     ret
 
 ; ============================================================================
-; flush_reply(edi=fd, rsi=buf, rdx=len) -> rax = 1 written / 0 backpressure.
-; Task 1: blocking-style write-all loop (small replies complete in one write).
-;   rbx = fd, r12 = cursor, r13 = remaining (all saved).
+; flush_reply(edi=fd, rsi=buf, rdx=len) -> rax = 1 fully written / 0 back-
+; pressure engaged (or conn closed on error). Non-blocking: on EAGAIN it
+; stashes the unwritten tail into write_base[fd], records wr_pos/wr_len, sets
+; ST_WATCH_OUT and MODs the epoll interest to EPOLLOUT (dropping EPOLLIN so the
+; loop never busy-spins). `len` is a single reply <= CONN_BUF_SIZE, so the tail
+; always fits the 16KB write buffer.
+;   rbx = fd, r12 = cursor (buf+written), r13 = remaining (all saved).
 ; ============================================================================
 flush_reply:
     push    rbx
     push    r12
-    push    r13                          ; 3 pushes: ==8 -> ==0
+    push    r13                          ; 3 pushes: ==8 -> ==0 (calls aligned)
     mov     ebx, edi                     ; fd
-    mov     r12, rsi                     ; cursor
-    mov     r13, rdx                     ; remaining
+    mov     r12, rsi                     ; cursor = buf + written
+    mov     r13, rdx                     ; remaining = len - written
     test    r13, r13
     jz      .ok1
 .w:
@@ -383,18 +401,42 @@ flush_reply:
     syscall
     test    rax, rax
     js      .werr
-    add     r12, rax
-    sub     r13, rax
-    jnz     .w
+    add     r12, rax                     ; cursor  += n
+    sub     r13, rax                     ; remaining -= n
+    jnz     .w                           ; short write -> keep going
 .ok1:
-    mov     rax, 1
+    mov     eax, 1                        ; fully sent
     jmp     .fret
 .werr:
     cmp     rax, -EAGAIN
-    je      .w                           ; retry (small replies won't spin)
+    je      .eagain
+    ; other error (EPIPE / ECONNRESET / ...): tear the conn down
     mov     edi, ebx
     call    close_conn
-    xor     eax, eax                     ; backpressure / failed
+    xor     eax, eax
+    jmp     .fret
+.eagain:
+    ; stash unwritten tail: memcpy(write_base[fd] + 0, cursor, remaining)
+    mov     rdi, rbx
+    shl     rdi, CONN_BUF_SHIFT
+    add     rdi, [rel write_base]        ; dest = write buffer for fd
+    mov     rsi, r12                     ; src  = unwritten tail
+    mov     rcx, r13                     ; count = remaining (<= CONN_BUF_SIZE)
+    rep     movsb
+    ; conn_state[fd]: wr_pos=0, wr_len=remaining, flags |= ST_WATCH_OUT
+    lea     rax, [rel conn_state]
+    mov     rcx, rbx
+    shl     rcx, CONN_STATE_SHIFT
+    add     rax, rcx
+    mov     qword [rax+8], 0             ; wr_pos = 0
+    mov     [rax+16], r13               ; wr_len = remaining
+    or      qword [rax+24], ST_WATCH_OUT
+    ; watch writes only (drop EPOLLIN) so we don't spin on a full send buffer
+    mov     edi, ebx
+    mov     rsi, EPOLL_CTL_MOD
+    mov     rdx, EPOLLOUT
+    call    ep_ctl
+    xor     eax, eax                     ; backpressure engaged
 .fret:
     pop     r13
     pop     r12
@@ -402,9 +444,63 @@ flush_reply:
     ret
 
 ; ============================================================================
-; on_writable(edi = fd): Task 1 stub (EPOLLOUT buffering lands in Task 2).
+; on_writable(edi = fd): EPOLLOUT is ready — resume flushing the stashed tail
+; from write_base[fd] starting at wr_pos. On full drain, clear wr state, MOD
+; interest back to EPOLLIN, and drain() any input buffered while we were
+; blocked. On EAGAIN just return (wait for the next EPOLLOUT). On real error,
+; close. Persists wr_pos/wr_len/flags to conn_state.
+;   rbx = fd (saved).
 ; ============================================================================
 on_writable:
+    push    rbx                          ; entry rsp%16==8 -> ==0 (calls aligned)
+    mov     ebx, edi                     ; fd
+.w:
+    ; &state
+    lea     rax, [rel conn_state]
+    mov     rcx, rbx
+    shl     rcx, CONN_STATE_SHIFT
+    add     rax, rcx
+    mov     r8, [rax+8]                  ; wr_pos
+    mov     r9, [rax+16]                 ; wr_len
+    mov     rdx, r9
+    sub     rdx, r8                      ; rem = wr_len - wr_pos
+    ; src = write_base[fd] + wr_pos
+    mov     rsi, rbx
+    shl     rsi, CONN_BUF_SHIFT
+    add     rsi, [rel write_base]
+    add     rsi, r8
+    mov     rdi, rbx                     ; fd
+    mov     rax, SYS_write               ; rdx = rem
+    syscall
+    test    rax, rax
+    js      .werr
+    ; wr_pos += n
+    lea     rcx, [rel conn_state]
+    mov     rdx, rbx
+    shl     rdx, CONN_STATE_SHIFT
+    add     rcx, rdx                     ; &state
+    add     [rcx+8], rax                 ; wr_pos += n
+    mov     r8, [rcx+8]                  ; new wr_pos
+    cmp     r8, [rcx+16]                 ; wr_pos < wr_len ?
+    jb      .w                           ; more to send
+    ; fully drained: clear write state, re-watch reads
+    mov     qword [rcx+8], 0             ; wr_pos = 0
+    mov     qword [rcx+16], 0            ; wr_len = 0
+    and     qword [rcx+24], ~ST_WATCH_OUT
+    mov     edi, ebx
+    mov     rsi, EPOLL_CTL_MOD
+    mov     rdx, EPOLLIN
+    call    ep_ctl
+    mov     edi, ebx
+    call    drain                        ; process input buffered while blocked
+    jmp     .done
+.werr:
+    cmp     rax, -EAGAIN
+    je      .done                        ; still can't write; wait for EPOLLOUT
+    mov     edi, ebx
+    call    close_conn                   ; real error
+.done:
+    pop     rbx
     ret
 
 ; ============================================================================

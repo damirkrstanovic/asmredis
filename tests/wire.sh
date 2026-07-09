@@ -100,3 +100,13 @@ if [ "$bexit" = "0" ] && grep -q 'requests per second' /tmp/asmc_bench.txt; then
 else
   echo "FAIL concurrency-c50 (exit=$bexit): $(tr '\r' '\n' < /tmp/asmc_bench.txt | tail -2)"; exit 1
 fi
+
+# --- Milestone C: backpressure / EPOLLOUT path (slow reader, large-ish value) ---
+./asmredis 7777 & SRV=$!; sleep 0.3
+bigval=$(python3 -c "print('x'*4000, end='')")
+if python3 tests/slow_reader.py 7777 2000 "$bigval" >/tmp/asmc_slow.txt 2>&1; then
+  echo "PASS backpressure"
+else
+  echo "FAIL backpressure: $(cat /tmp/asmc_slow.txt)"; kill $SRV 2>/dev/null; exit 1
+fi
+kill $SRV 2>/dev/null
