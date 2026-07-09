@@ -27,6 +27,8 @@ lc_set:     db "set"
 lc_get:     db "get"
 lc_del:     db "del"
 lc_echo:    db "echo"
+m_oom:      db "-ERR out of memory", 13, 10
+m_oom_len   equ $ - m_oom
 
 section .bss
 cmd_upper:  resb 16
@@ -119,7 +121,7 @@ cmd_echo:
     add     rsp, 8
     ret
 
-; cmd_set: SET key value -> +OK\r\n. Copies key+val into the arena.
+; cmd_set: SET key value -> +OK\r\n, or -ERR out of memory\r\n if the arena is full.
 cmd_set:
     cmp     qword [rel argc], 3
     jne     .wa
@@ -128,10 +130,18 @@ cmd_set:
     mov     rsi, [rel argv_lens + 8]    ; key len
     mov     rdx, [rel argv_ptrs + 16]   ; val ptr
     mov     rcx, [rel argv_lens + 16]   ; val len
-    call    ks_set                      ; rax=0 ok, 1 oom (64MB arena; tests won't oom)
+    call    ks_set                      ; rax=0 ok, 1 oom (arena exhausted)
+    test    rax, rax
+    jnz     .oom
     lea     rdi, [rel s_ok]
     mov     rsi, s_ok_len
     call    reply_simple
+    add     rsp, 8
+    ret
+.oom:
+    lea     rdi, [rel m_oom]            ; "-ERR out of memory\r\n" (already framed)
+    mov     rsi, m_oom_len
+    call    append_raw
     add     rsp, 8
     ret
 .wa:
