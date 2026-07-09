@@ -479,6 +479,8 @@ _free_value:
     jmp     .done
 .list:
     mov     rdi, [rbx+24]           ; list header
+    test    rdi, rdi
+    jz      .done                   ; null header (defensive) -> nothing to free
     call    list_free
 .done:
     pop     rbx
