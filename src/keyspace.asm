@@ -1,7 +1,8 @@
 %include "syscalls.inc"
-global ks_init, ks_get, ks_set, ks_del
+global ks_init, ks_get, ks_set, ks_del, ks_lookup, ks_insert
 extern mem_alloc, mem_free, memcmp_n, fnv1a
 extern table_alloc, table_free
+extern list_free
 
 ; Hashtable entry layout (40 bytes):
 ;   [0]=next_ptr  [8]=key_ptr  [16]=key_len  [24]=val_ptr  [32]=val_len
@@ -300,14 +301,13 @@ _del_in_table:
     jne     .adv
     mov     rcx, [rbx]              ; entry->next
     mov     [rbp], rcx              ; *slot = next
-    mov     rdi, [rbx+24]           ; val_ptr
-    mov     rsi, [rbx+32]           ; val_len
-    call    mem_free
+    mov     rdi, rbx                ; entry (free value, type-aware)
+    call    _free_value
     mov     rdi, [rbx+8]            ; key_ptr
     mov     rsi, [rbx+16]           ; key_len
     call    mem_free
     mov     rdi, rbx                ; entry block
-    mov     rsi, 40
+    mov     rsi, ENTRY_SZ
     call    mem_free
     lea     rcx, [rel ht_used]
     dec     qword [rcx + r15*8]     ; ht_used[t]--
@@ -394,11 +394,11 @@ ks_set:
     test    rax, rax
     je      .oom                    ; old value intact
     mov     r14, rax                ; new value block
-    mov     rdi, [rbx+24]           ; old val_ptr
-    mov     rsi, [rbx+32]           ; old val_len
-    call    mem_free
+    mov     rdi, rbx                ; entry (free old value, type-aware)
+    call    _free_value
     mov     [rbx+24], r14
     mov     [rbx+32], r15
+    mov     qword [rbx+40], TYPE_STR ; now a string
     jmp     .ok
 .insert:
     call    _maybe_expand           ; may start a rehash before we route
@@ -414,7 +414,7 @@ ks_set:
     test    rax, rax
     je      .oom_free_key
     mov     r14, rax                ; val copy
-    mov     rdi, 40
+    mov     rdi, ENTRY_SZ
     call    mem_alloc               ; entry
     test    rax, rax
     je      .oom_free_keyval
@@ -422,6 +422,7 @@ ks_set:
     mov     [rax+16], r13           ; key_len
     mov     [rax+24], r14           ; val_ptr
     mov     [rax+32], r15           ; val_len
+    mov     qword [rax+40], TYPE_STR ; type = string
     mov     rdi, rax                ; entry
     mov     rsi, r12                ; key
     mov     rdx, r13                ; len
@@ -477,6 +478,92 @@ ks_del:
     jmp     .ret
 .deleted:
     mov     rax, 1
+.ret:
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
+    ret
+
+; _free_value(rdi=entry): free the entry's VALUE only (not entry/key), dispatched
+; on type. Preserves all callee-saved registers.
+_free_value:
+    push    rbx                     ; entry 8 -> 0 (call aligned)
+    mov     rbx, rdi
+    cmp     qword [rbx+40], TYPE_STR
+    jne     .list
+    mov     rdi, [rbx+24]           ; val_ptr
+    mov     rsi, [rbx+32]           ; val_len
+    call    mem_free
+    jmp     .done
+.list:
+    mov     rdi, [rbx+24]           ; list header
+    call    list_free
+.done:
+    pop     rbx
+    ret
+
+; ks_lookup(rdi=key, rsi=len) -> rax=entry|0. Rehash-step + find; returns the raw
+; entry so callers can inspect [entry+40] type and [entry+24] val_ptr.
+ks_lookup:
+    push    r12
+    push    r13
+    sub     rsp, 8                  ; 2 pushes + 8 -> rsp%16==0 at calls
+    mov     r12, rdi
+    mov     r13, rsi
+    call    _rehash_step
+    mov     rdi, r12
+    mov     rsi, r13
+    call    _find
+    add     rsp, 8
+    pop     r13
+    pop     r12
+    ret
+
+; ks_insert(rdi=key, rsi=len) -> rax=entry|0 (OOM). Creates a NEW entry (key
+; copied, val_ptr/val_len=0, type=STR), linked into the destination table.
+; Caller fills val_ptr/val_len/type. Assumes the key is absent (caller checked
+; via ks_lookup).
+ks_insert:
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+    push    r15                     ; 5 pushes -> rsp%16==0 at calls
+    mov     r12, rdi                ; key
+    mov     r13, rsi                ; klen
+    call    _rehash_step
+    call    _maybe_expand
+    mov     rdi, r12
+    mov     rsi, r13
+    call    _copy_arena             ; copy key
+    test    rax, rax
+    je      .oom
+    mov     rbx, rax                ; key copy
+    mov     rdi, ENTRY_SZ
+    call    mem_alloc               ; entry
+    test    rax, rax
+    je      .oom_free_key
+    mov     r14, rax                ; entry
+    mov     [r14+8], rbx            ; key_ptr
+    mov     [r14+16], r13           ; key_len
+    xor     rcx, rcx
+    mov     [r14+24], rcx           ; val_ptr = 0
+    mov     [r14+32], rcx           ; val_len = 0
+    mov     [r14+40], rcx           ; type = TYPE_STR (0)
+    mov     rdi, r14                ; entry
+    mov     rsi, r12                ; key
+    mov     rdx, r13                ; len
+    call    _insert_entry           ; prepend into ht[t], used++
+    mov     rax, r14                ; return entry
+    jmp     .ret
+.oom_free_key:
+    mov     rdi, rbx
+    mov     rsi, r13
+    call    mem_free
+.oom:
+    xor     rax, rax
 .ret:
     pop     r15
     pop     r14
