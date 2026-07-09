@@ -1,6 +1,6 @@
 %include "syscalls.inc"
 global ks_get, ks_set, ks_del
-extern arena_alloc, memcmp_n, fnv1a
+extern mem_alloc, mem_free, memcmp_n, fnv1a
 extern buckets
 
 ; Hashtable entry layout (40 bytes):
@@ -71,15 +71,15 @@ ks_get:
     xor     rdx, rdx
     ret
 
-; _copy_arena(rdi=src, rsi=len) -> rax = copied buf, or 0 oom
+; _copy_arena(rdi=src, rsi=len) -> rax = copied buf (>= len, class-sized), or 0 oom
 _copy_arena:
     push    rbx
     push    r12
-    sub     rsp, 8                  ; 2 pushes even -> align for arena_alloc call
+    sub     rsp, 8                  ; 2 pushes even -> align for the call
     mov     rbx, rdi                ; src
     mov     r12, rsi                ; len
     mov     rdi, rsi                ; size to alloc
-    call    arena_alloc             ; rax=dest
+    call    mem_alloc               ; rax=dest (rounded up to a size class)
     test    rax, rax
     je      .oom
     mov     rdi, rax                ; dest
@@ -108,33 +108,37 @@ ks_set:
     call    _find
     test    rax, rax
     je      .insert
-    ; overwrite existing entry's value (old bytes leak, intentional)
+    ; --- overwrite: alloc new value first, only then free the old one ---
     mov     rbx, rax                ; entry
-    mov     rdi, r14
-    mov     rsi, r15
-    call    _copy_arena             ; copy new value
+    mov     rdi, r14                ; new val
+    mov     rsi, r15                ; new vlen
+    call    _copy_arena             ; rax = new value block
     test    rax, rax
-    je      .oom
-    mov     [rbx+24], rax           ; val_ptr
-    mov     [rbx+32], r15           ; val_len
+    je      .oom                    ; nothing freed/changed; old value intact
+    mov     r14, rax                ; stash new block (val src no longer needed)
+    mov     rdi, [rbx+24]           ; old val_ptr
+    mov     rsi, [rbx+32]           ; old val_len
+    call    mem_free                ; reclaim old value's block
+    mov     [rbx+24], r14           ; val_ptr = new block
+    mov     [rbx+32], r15           ; val_len = new len
     jmp     .ok
 .insert:
     mov     rdi, r12
     mov     rsi, r13
     call    _copy_arena             ; copy key
     test    rax, rax
-    je      .oom
+    je      .oom                    ; nothing allocated yet
     mov     rbx, rax                ; key copy
     mov     rdi, r14
     mov     rsi, r15
     call    _copy_arena             ; copy val
     test    rax, rax
-    je      .oom
+    je      .oom_free_key
     mov     r14, rax                ; reuse r14 = val copy
     mov     rdi, 40
-    call    arena_alloc             ; entry
+    call    mem_alloc               ; entry
     test    rax, rax
-    je      .oom
+    je      .oom_free_keyval
     mov     [rax+8], rbx            ; key_ptr
     mov     [rax+16], r13           ; key_len
     mov     [rax+24], r14           ; val_ptr
@@ -150,6 +154,14 @@ ks_set:
 .ok:
     xor     rax, rax
     jmp     .ret
+.oom_free_keyval:
+    mov     rdi, r14                ; val copy
+    mov     rsi, r15                ; vlen
+    call    mem_free
+.oom_free_key:
+    mov     rdi, rbx                ; key copy
+    mov     rsi, r13                ; klen
+    call    mem_free
 .oom:
     mov     rax, 1
 .ret:
@@ -186,9 +198,18 @@ ks_del:
     call    memcmp_n
     test    rax, rax
     jne     .adv
-    ; match: *slot = entry->next
+    ; match: unlink then reclaim the entry's three blocks
     mov     rcx, [rbx]              ; entry->next
-    mov     [r14], rcx
+    mov     [r14], rcx              ; *slot = entry->next
+    mov     rdi, [rbx+24]           ; val_ptr
+    mov     rsi, [rbx+32]           ; val_len
+    call    mem_free
+    mov     rdi, [rbx+8]            ; key_ptr
+    mov     rsi, [rbx+16]           ; key_len
+    call    mem_free
+    mov     rdi, rbx                ; entry block
+    mov     rsi, 40
+    call    mem_free
     mov     rax, 1
     jmp     .ret
 .adv:
