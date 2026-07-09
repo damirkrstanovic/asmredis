@@ -511,16 +511,19 @@ on_writable:
 ; conn_state record. Preserves callee-saved regs.
 ; ============================================================================
 close_conn:
-    mov     r8d, edi                     ; save fd
-    mov     rax, SYS_close
-    syscall                              ; rdi still = fd
     lea     rax, [rel conn_state]
-    mov     rcx, r8
+    mov     ecx, edi                     ; zero-extends fd into rcx
     shl     rcx, CONN_STATE_SHIFT
     add     rax, rcx                     ; &state
+    test    qword [rax+24], ST_IN_USE    ; already closed? -> idempotent no-op
+    jz      .done
+    mov     r8, rax                      ; save &state across close (r8 survives syscall)
+    mov     rax, SYS_close
+    syscall                              ; rdi still = fd
     xor     rcx, rcx
-    mov     [rax], rcx
-    mov     [rax+8], rcx
-    mov     [rax+16], rcx
-    mov     [rax+24], rcx
+    mov     [r8], rcx
+    mov     [r8+8], rcx
+    mov     [r8+16], rcx
+    mov     [r8+24], rcx
+.done:
     ret

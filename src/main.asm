@@ -9,6 +9,8 @@ section .rodata
 banner:      db "asmredis", 10
 banner_len:  equ $ - banner
 flag_banner: db "--banner"
+err_port:     db "invalid port (use 1-65535)", 10
+err_port_len: equ $ - err_port
 
 section .text
 _start:
@@ -36,6 +38,11 @@ _start:
     mov     rdi, [rsp+16]        ; argv[1] ptr
     call    atoi_port            ; rax = port
     mov     rdi, rax
+    ; validate 1..65535 (atoi_port would otherwise silently truncate to 16 bits)
+    test    rdi, rdi
+    jz      .bad_port
+    cmp     rdi, 65535
+    ja      .bad_port
 .have_port:
     push    rdi                  ; preserve port across arena_init
     call    arena_init           ; mmap the keyspace arena
@@ -44,10 +51,18 @@ _start:
     xor     rdi, rdi
     mov     rax, SYS_exit
     syscall
+.bad_port:
+    mov     rax, SYS_write
+    mov     rdi, 2
+    lea     rsi, [rel err_port]
+    mov     rdx, err_port_len
+    syscall
+    mov     rax, SYS_exit
+    mov     rdi, 1
+    syscall
 
 section .bss
-global read_buf, out_buf, out_len, argc, argv_ptrs, argv_lens
-read_buf:   resb READ_BUF_SIZE
+global out_buf, out_len, argc, argv_ptrs, argv_lens
 out_buf:    resb OUT_BUF_SIZE
 out_len:    resq 1
 argc:       resq 1
