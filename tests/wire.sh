@@ -161,3 +161,14 @@ fi
 kill $SRV 2>/dev/null
 
 [ $((ow + dl + oo)) -eq 0 ] || exit 1
+
+# --- Milestone D: rehash correctness (50k keys across many resizes) ---
+./asmredis 7777 & SRV=$!; sleep 0.3
+if timeout 60 python3 tests/rehash.py 7777 >/tmp/asmd_rehash.txt 2>&1; then
+  echo "PASS rehash-correctness"; rh=0
+else
+  echo "FAIL rehash-correctness: $(cat /tmp/asmd_rehash.txt)"; rh=1
+fi
+kill $SRV 2>/dev/null
+
+[ $rh -eq 0 ] || exit 1
