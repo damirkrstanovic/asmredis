@@ -119,3 +119,16 @@ else
   echo "FAIL big-reply-backpressure: $(cat /tmp/asmc_big.txt)"; kill $SRV 2>/dev/null; exit 1
 fi
 kill $SRV 2>/dev/null
+
+# --- Milestone C: heavier concurrency (-c 200) still completes ---
+./asmredis 7777 & SRV=$!; sleep 0.3
+timeout 40 valkey-benchmark -p 7777 -t set,get -n 40000 -c 200 -q >/tmp/asmc_b200.txt 2>/dev/null
+b2=$?
+# --- fd-leak: many short-lived connections; server fd count returns to baseline ---
+base=$(ls /proc/$SRV/fd 2>/dev/null | wc -l)
+for i in $(seq 1 200); do valkey-cli -p 7777 PING >/dev/null 2>&1; done
+sleep 0.3
+after=$(ls /proc/$SRV/fd 2>/dev/null | wc -l)
+kill $SRV 2>/dev/null
+if [ "$b2" = "0" ] && grep -q 'requests per second' /tmp/asmc_b200.txt; then echo "PASS concurrency-c200"; else echo "FAIL concurrency-c200 (exit=$b2)"; exit 1; fi
+if [ "$after" -le $((base + 3)) ]; then echo "PASS no-fd-leak (base=$base after=$after)"; else echo "FAIL no-fd-leak (base=$base after=$after)"; exit 1; fi

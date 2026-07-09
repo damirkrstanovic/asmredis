@@ -81,6 +81,38 @@ Milestone C (single-threaded `epoll` event loop) is designed to close exactly
 this gap, touching only `src/net.asm` — `parser`/`dispatch`/`keyspace` are
 already agnostic to how bytes arrive.
 
+---
+
+## Milestone C (epoll event loop)
+
+The milestone-A `-c 50` stall above is **now resolved**: with the single-threaded
+non-blocking `epoll` event loop (per-connection read/write buffers, `EPOLLOUT`
+backpressure), asmredis completes every run and **scales cleanly** across all
+concurrency levels instead of hanging at `-c 50`.
+
+Concurrency sweep, `valkey-benchmark -t set,get -n 50000 -q`, default payload
+(`-d 3`), loopback. asmredis on 7777, Valkey 9.1.0 oracle on 7778, same box.
+Numbers are throughput (requests/sec) from a single run — rough, not authoritative.
+
+| `-c` | asmredis SET | valkey SET | asmredis GET | valkey GET |
+|---|---|---|---|---|
+| 1   | **50,352** | 40,193 | **50,659** | 41,701 |
+| 20  | 103,520 | 108,225 | 103,520 | 105,042 |
+| 50  | 102,249 | 108,932 | 102,669 | 107,066 |
+| 100 | 102,881 | 105,932 | 102,459 | 103,950 |
+| 200 | 104,167 | 104,167 | 103,093 | 104,384 |
+
+- At `-c 1` asmredis stays ~25% ahead (shorter per-request path, as before).
+- From `-c 20` upward both servers saturate the single core at ~100–108K rps;
+  asmredis tracks Valkey within a few percent and **no longer stalls** — the
+  event loop multiplexes all clients in one thread just like Valkey's does.
+- p50 latency grows with concurrency as expected (≈0.015 ms at `-c 1` →
+  ≈0.99 ms at `-c 200`) and stays within a few percent of Valkey's.
+
+The `tests/wire.sh` suite additionally verifies a heavier `-c 200 -n 40000` run
+completes and that file-descriptor count returns to baseline after 200
+short-lived connections (no fd leak) — see `concurrency-c200` and `no-fd-leak`.
+
 ## Caveats / notes
 
 - **`PING` inline not supported.** `valkey-benchmark -t ping` runs `PING_INLINE`
