@@ -4,7 +4,7 @@
 # Exit 0 on success, 1 on failure (prints a diagnostic).
 import socket, sys
 
-VLEN = 16000          # under the 16376 storable cap; lands in the 16384 class
+VLEN = 16000          # under the 16384 storable cap; lands in the 16384 class
 ITERS = 10000         # 10000 * 16000 ~= 160 MB through a 64 MB arena
 
 def connect(port):

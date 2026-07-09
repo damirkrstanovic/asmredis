@@ -1,5 +1,5 @@
 %include "syscalls.inc"
-global arena_init, arena_alloc, mem_alloc, mem_free
+global arena_init, mem_alloc, mem_free
 
 section .bss
 arena_next: resq 1
@@ -51,7 +51,8 @@ arena_alloc:
 ; Rounds size up to the next power of two, clamped to a minimum of 8.
 ; CALLER CONTRACT: size MUST be <= 16384. Larger sizes yield index >= 12, which
 ; is out of bounds for free_lists (12 slots) and would corrupt adjacent .bss.
-; Callers are safe because the parser caps keys/values at ~16376 and entries=40.
+; Callers are safe because the parser caps keys/values at 16384 (READ_BUF_SIZE)
+; and entries=40.
 ; Clobbers rax, rcx, rdx; preserves rbx and everything else.
 _size_class:
     cmp     rdi, 8
