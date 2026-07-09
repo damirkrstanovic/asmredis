@@ -100,6 +100,7 @@ check LRANGE nope 0 -1
 check GET ml
 check SET ml str
 check GET ml
+check LRANGE ml 0 -1
 check LPUSH ml a
 check LPUSH
 check LRANGE ml 0
@@ -112,6 +113,7 @@ check LPOP solo
 check RPUSH solo only
 check LPOP solo
 check LLEN solo
+check GET solo
 kill $SRV 2>/dev/null
 valkey-cli -p 7778 shutdown nosave 2>/dev/null
 [ "$fail" = "0" ] && echo "PASS conformance" || { echo "FAIL conformance"; exit 1; }

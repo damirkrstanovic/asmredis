@@ -57,13 +57,18 @@ def main():
         s.sendall(cmd("LLEN","L"));  a=r.line()
         s.sendall(cmd("LPOP","L"));  b=read_bulk(r)
         if a!=b":0" or b is not None: print("FAIL auto-delete %r %r"%(a,b)); return 1
-        BIG=b"x"*4000
-        for rep in range(6000):
+        # GET on an auto-deleted key must be nil, NOT WRONGTYPE (which would mean an
+        # empty list header persisted instead of being deleted).
+        s.sendall(cmd("GET","L")); g=read_bulk(r)
+        if g is not None: print("FAIL auto-delete: GET L -> %r (empty list persisted)"%g); return 1
+        BIG=b"x"*16000
+        CYCLES=10000                 # 10000 * 16000 = 160MB through a 64MB arena
+        for rep in range(CYCLES):
             s.sendall(cmd("LPUSH","C",BIG))
             if r.line()!=b":1": print("FAIL churn push %d"%rep); return 1
             s.sendall(cmd("RPOP","C"))
             if read_bulk(r)!=BIG: print("FAIL churn pop %d"%rep); return 1
-        print("OK list: order/LLEN/auto-delete correct; %d churn cycles reclaimed"%6000)
+        print("OK list: order/LLEN/auto-delete correct; %d churn cycles reclaimed"%CYCLES)
         return 0
     except (EOFError,OSError,ValueError,AssertionError) as e:
         print("FAIL list: %r"%e); return 1
