@@ -86,6 +86,32 @@ check SET
 check GET
 check DEL
 check ECHO
+check LPUSH ml a b c
+check LRANGE ml 0 -1
+check RPUSH ml x y
+check LRANGE ml 0 -1
+check LLEN ml
+check LPOP ml
+check RPOP ml
+check LRANGE ml 0 -1
+check LLEN nope
+check LPOP nope
+check LRANGE nope 0 -1
+check GET ml
+check SET ml str
+check GET ml
+check LPUSH ml a
+check LPUSH
+check LRANGE ml 0
+check LRANGE ml x 1
+check RPUSH mk 1 2 3 4 5
+check LRANGE mk 1 3
+check LRANGE mk -2 -1
+check LRANGE mk -100 100
+check LPOP solo
+check RPUSH solo only
+check LPOP solo
+check LLEN solo
 kill $SRV 2>/dev/null
 valkey-cli -p 7778 shutdown nosave 2>/dev/null
 [ "$fail" = "0" ] && echo "PASS conformance" || { echo "FAIL conformance"; exit 1; }
@@ -181,3 +207,15 @@ fi
 kill $SRV 2>/dev/null
 
 [ $rh -eq 0 ] || exit 1
+
+# --- Milestone E: LIST stress + leak ---
+./asmredis 7777 & SRV=$!
+for _i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/7777) 2>/dev/null && { exec 3>&- 3<&-; break; }; sleep 0.1; done
+if timeout 60 python3 tests/list.py 7777 >/tmp/asme_list.txt 2>&1; then
+  echo "PASS list-stress"; ls=0
+else
+  echo "FAIL list-stress: $(cat /tmp/asme_list.txt)"; ls=1
+fi
+kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
+
+[ $ls -eq 0 ] || exit 1
