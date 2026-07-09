@@ -28,8 +28,6 @@
 %define READ_BUF_SIZE   16384
 %define OUT_BUF_SIZE    65536
 %define MAX_ARGS        128
-%define NBUCKETS        1024
-%define BUCKET_MASK     1023
 %define DICT_INITIAL     4          ; initial hashtable buckets (Redis default)
 %define REHASH_MAX_EMPTY 10         ; empty buckets skipped per rehash step
 

@@ -4,6 +4,7 @@ global _start
 extern net_serve
 extern atoi_port
 extern arena_init
+extern ks_init
 
 section .rodata
 banner:      db "asmredis", 10
@@ -44,8 +45,11 @@ _start:
     cmp     rdi, 65535
     ja      .bad_port
 .have_port:
-    push    rdi                  ; preserve port across arena_init
-    call    arena_init           ; mmap the keyspace arena
+    push    rdi                  ; preserve port across init calls
+    sub     rsp, 8               ; keep rsp%16==0 at arena_init/ks_init calls
+    call    arena_init           ; mmap the value arena
+    call    ks_init              ; mmap the initial hashtable
+    add     rsp, 8
     pop     rdi
     call    net_serve            ; never returns
     xor     rdi, rdi
@@ -68,5 +72,3 @@ out_len:    resq 1
 argc:       resq 1
 argv_ptrs:  resq MAX_ARGS
 argv_lens:  resq MAX_ARGS
-global buckets
-buckets:    resq NBUCKETS

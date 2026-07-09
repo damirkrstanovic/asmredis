@@ -158,12 +158,21 @@ if python3 tests/reclaim.py 7777 oom >/tmp/asmb_oom.txt 2>&1; then
 else
   echo "FAIL oom-error: $(cat /tmp/asmb_oom.txt)"; oo=1
 fi
-kill $SRV 2>/dev/null
+# Reap the oom server (it fully committed the 64 MB arena; SIGTERM teardown can
+# take >0.3s) so it releases port 7777 before the next server binds. Without the
+# wait, the following bind() races the dying socket and fails with EADDRINUSE.
+kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
 
 [ $((ow + dl + oo)) -eq 0 ] || exit 1
 
 # --- Milestone D: rehash correctness (50k keys across many resizes) ---
-./asmredis 7777 & SRV=$!; sleep 0.3
+./asmredis 7777 & SRV=$!
+# Wait until the server is actually accepting on 7777 (readiness, not a fixed
+# sleep) so the client never races startup.
+for _i in $(seq 1 50); do
+  (exec 3<>/dev/tcp/127.0.0.1/7777) 2>/dev/null && { exec 3>&- 3<&-; break; }
+  sleep 0.1
+done
 if timeout 60 python3 tests/rehash.py 7777 >/tmp/asmd_rehash.txt 2>&1; then
   echo "PASS rehash-correctness"; rh=0
 else
