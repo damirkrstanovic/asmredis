@@ -3,6 +3,7 @@
 %define SYS_write       1
 %define SYS_close       3
 %define SYS_mmap        9
+%define SYS_munmap      11
 %define SYS_socket      41
 %define SYS_accept      43
 %define SYS_bind        49
@@ -29,6 +30,8 @@
 %define MAX_ARGS        128
 %define NBUCKETS        1024
 %define BUCKET_MASK     1023
+%define DICT_INITIAL     4          ; initial hashtable buckets (Redis default)
+%define REHASH_MAX_EMPTY 10         ; empty buckets skipped per rehash step
 
 ; ---- milestone C: epoll / non-blocking ----
 %define SYS_epoll_create1  291

@@ -1,5 +1,5 @@
 %include "syscalls.inc"
-global arena_init, mem_alloc, mem_free
+global arena_init, mem_alloc, mem_free, table_alloc, table_free
 
 section .bss
 arena_next: resq 1
@@ -104,4 +104,31 @@ mem_free:
     mov     [rbx], rax          ; ptr->next = old head
     mov     [rcx], rbx          ; head = ptr
     pop     rbx
+    ret
+
+; table_alloc(rdi=nbuckets) -> rax=ptr or 0. mmap nbuckets*8 zeroed bytes (anon
+; RW) for a bucket array. Separate from the value arena; can exceed 16384 B.
+; Leaf (only a syscall) — no stack-alignment obligation.
+table_alloc:
+    shl     rdi, 3              ; nbuckets * 8 = byte length
+    mov     rsi, rdi            ; length
+    mov     rax, SYS_mmap
+    xor     rdi, rdi            ; addr = NULL
+    mov     rdx, PROT_RW
+    mov     r10, MAP_ANON_PRIV
+    mov     r8, -1              ; fd
+    xor     r9, r9              ; offset
+    syscall
+    cmp     rax, -4095          ; mmap error range [-4095,-1]
+    jae     .fail
+    ret
+.fail:
+    xor     rax, rax
+    ret
+
+; table_free(rdi=ptr, rsi=nbuckets). munmap(ptr, nbuckets*8). Leaf.
+table_free:
+    shl     rsi, 3              ; nbuckets * 8 = byte length
+    mov     rax, SYS_munmap
+    syscall
     ret
