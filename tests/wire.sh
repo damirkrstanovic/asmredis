@@ -132,3 +132,32 @@ after=$(ls /proc/$SRV/fd 2>/dev/null | wc -l)
 kill $SRV 2>/dev/null
 if [ "$b2" = "0" ] && grep -q 'requests per second' /tmp/asmc_b200.txt; then echo "PASS concurrency-c200"; else echo "FAIL concurrency-c200 (exit=$b2)"; exit 1; fi
 if [ "$after" -le $((base + 3)) ]; then echo "PASS no-fd-leak (base=$base after=$after)"; else echo "FAIL no-fd-leak (base=$base after=$after)"; exit 1; fi
+
+# --- Milestone B: overwrite reclamation (10k x 16KB through a 64MB arena) ---
+./asmredis 7777 & SRV=$!; sleep 0.3
+if python3 tests/reclaim.py 7777 overwrite >/tmp/asmb_ow.txt 2>&1; then
+  echo "PASS reclaim-overwrite"; ow=0
+else
+  echo "FAIL reclaim-overwrite: $(cat /tmp/asmb_ow.txt)"; ow=1
+fi
+kill $SRV 2>/dev/null
+
+# --- Milestone B: SET/DEL reclamation (10k cycles, no OOM) ---
+./asmredis 7777 & SRV=$!; sleep 0.3
+if python3 tests/reclaim.py 7777 del >/tmp/asmb_del.txt 2>&1; then
+  echo "PASS reclaim-del"; dl=0
+else
+  echo "FAIL reclaim-del: $(cat /tmp/asmb_del.txt)"; dl=1
+fi
+kill $SRV 2>/dev/null
+
+# --- Milestone B: arena exhaustion is reported as -ERR out of memory ---
+./asmredis 7777 & SRV=$!; sleep 0.3
+if python3 tests/reclaim.py 7777 oom >/tmp/asmb_oom.txt 2>&1; then
+  echo "PASS oom-error"; oo=0
+else
+  echo "FAIL oom-error: $(cat /tmp/asmb_oom.txt)"; oo=1
+fi
+kill $SRV 2>/dev/null
+
+[ $((ow + dl + oo)) -eq 0 ] || exit 1
