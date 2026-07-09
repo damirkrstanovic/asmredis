@@ -1,5 +1,6 @@
 %include "syscalls.inc"
 global reply_simple, reply_bulk, reply_null, reply_int, reply_err, append_raw
+global reply_array_header
 extern out_buf, out_len
 extern itoa_u
 
@@ -97,4 +98,13 @@ reply_err:                       ; rdi=ptr, rsi=len -> "<payload>\r\n"
 
 append_raw:                      ; rdi=ptr, rsi=len -> raw bytes, no crlf
     call    _put_bytes
+    ret
+
+reply_array_header:              ; rdi=count -> "*<n>\r\n"
+    push    rdi
+    mov     r8b, '*'
+    call    _put_byte
+    pop     rdi
+    call    _put_uint
+    call    _put_crlf
     ret

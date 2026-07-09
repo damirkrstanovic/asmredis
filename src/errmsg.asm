@@ -1,5 +1,6 @@
 %include "syscalls.inc"
 global emit_protoerr, emit_wrongargs
+global emit_wrongtype, emit_notint, emit_oom
 extern append_raw
 
 section .rodata
@@ -9,6 +10,12 @@ wa_pre:      db "-ERR wrong number of arguments for '"
 wa_pre_len   equ $ - wa_pre
 wa_post:     db "' command", 13, 10
 wa_post_len  equ $ - wa_post
+m_wrongtype:     db "-WRONGTYPE Operation against a key holding the wrong kind of value", 13, 10
+m_wrongtype_len  equ $ - m_wrongtype
+m_notint:        db "-ERR value is not an integer or out of range", 13, 10
+m_notint_len     equ $ - m_notint
+m_oom2:          db "-ERR out of memory", 13, 10
+m_oom2_len       equ $ - m_oom2
 
 section .text
 ; emit_protoerr: append "-ERR Protocol error\r\n" to out_buf.
@@ -40,3 +47,18 @@ emit_wrongargs:
     pop     r12
     pop     rbx
     ret
+
+emit_wrongtype:
+    lea     rdi, [rel m_wrongtype]
+    mov     rsi, m_wrongtype_len
+    jmp     append_raw
+
+emit_notint:
+    lea     rdi, [rel m_notint]
+    mov     rsi, m_notint_len
+    jmp     append_raw
+
+emit_oom:
+    lea     rdi, [rel m_oom2]
+    mov     rsi, m_oom2_len
+    jmp     append_raw

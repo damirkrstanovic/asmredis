@@ -1,5 +1,6 @@
 %include "syscalls.inc"
 global arena_init, mem_alloc, mem_free, table_alloc, table_free
+global mem_dup
 
 section .bss
 arena_next: resq 1
@@ -103,6 +104,28 @@ mem_free:
     mov     rax, [rcx]          ; old head
     mov     [rbx], rax          ; ptr->next = old head
     mov     [rcx], rbx          ; head = ptr
+    pop     rbx
+    ret
+
+; mem_dup(rdi=src, rsi=len) -> rax=copy or 0 (OOM). mem_alloc(len) + copy len bytes.
+; len 0 yields a valid non-null 8-byte block (copies nothing).
+mem_dup:
+    push    rbx
+    push    r12
+    sub     rsp, 8              ; 2 pushes + 8 -> rsp%16==0 at call
+    mov     rbx, rdi            ; src
+    mov     r12, rsi            ; len
+    mov     rdi, rsi            ; size
+    call    mem_alloc
+    test    rax, rax
+    je      .done
+    mov     rdi, rax            ; dest
+    mov     rsi, rbx            ; src
+    mov     rcx, r12            ; len
+    rep     movsb               ; rax (dest base) preserved
+.done:
+    add     rsp, 8
+    pop     r12
     pop     rbx
     ret
 
