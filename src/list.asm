@@ -1,12 +1,26 @@
 %include "syscalls.inc"
 global list_new, list_push_head, list_push_tail
 global list_pop_head, list_pop_tail, list_free
+global cmd_lpush, cmd_rpush, cmd_lpop, cmd_rpop, cmd_llen, cmd_lrange
 extern mem_alloc, mem_free, mem_dup
+extern ks_lookup, ks_insert, ks_del
+extern argc, argv_ptrs, argv_lens
+extern reply_bulk, reply_int, reply_null, reply_array_header
+extern emit_wrongtype, emit_notint, emit_oom, emit_wrongargs
+extern parse_int
 
 ; header: [0]=head [8]=tail [16]=length          (24 bytes, class 32)
 ; node:   [0]=prev [8]=next [16]=str_ptr [24]=str_len  (32 bytes, class 32)
 %define HDR_SZ   24
 %define NODE_SZ  32
+
+section .rodata
+lc_lpush:  db "lpush"
+lc_rpush:  db "rpush"
+lc_lpop:   db "lpop"
+lc_rpop:   db "rpop"
+lc_llen:   db "llen"
+lc_lrange: db "lrange"
 
 section .text
 
@@ -245,4 +259,323 @@ list_free:
     pop     r13
     pop     r12
     pop     rbx
+    ret
+
+; ---- LPUSH / RPUSH key v [v...] -> :newlen ----
+cmd_lpush:
+    cmp     qword [rel argc], 3
+    jb      .wa
+    xor     eax, eax                ; dir = head
+    jmp     _push_common
+.wa:
+    lea     rdi, [rel lc_lpush]
+    mov     rsi, 5
+    sub     rsp, 8
+    call    emit_wrongargs
+    add     rsp, 8
+    ret
+cmd_rpush:
+    cmp     qword [rel argc], 3
+    jb      .wa
+    mov     eax, 1                  ; dir = tail
+    jmp     _push_common
+.wa:
+    lea     rdi, [rel lc_rpush]
+    mov     rsi, 5
+    sub     rsp, 8
+    call    emit_wrongargs
+    add     rsp, 8
+    ret
+
+; _push_common: eax=dir (0 head, 1 tail). Arity already checked (>=3).
+_push_common:
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+    push    r15                     ; 5 pushes -> rsp%16==0 at calls
+    mov     r15, rax                ; dir (0=head, 1=tail)
+    mov     rdi, [rel argv_ptrs + 8]
+    mov     rsi, [rel argv_lens + 8]
+    call    ks_lookup
+    test    rax, rax
+    jz      .create
+    cmp     qword [rax+40], TYPE_LIST
+    jne     .wrongtype
+    mov     rbx, [rax+24]           ; header
+    xor     r14, r14                ; auto-created = 0
+    jmp     .pushloop
+.create:
+    mov     rdi, [rel argv_ptrs + 8]
+    mov     rsi, [rel argv_lens + 8]
+    call    ks_insert               ; rax = entry or 0
+    test    rax, rax
+    jz      .oom
+    mov     r12, rax                ; entry
+    call    list_new                ; rax = header or 0
+    test    rax, rax
+    jz      .oom_del_key            ; entry created but no list -> undo key
+    mov     rbx, rax                ; header
+    mov     [r12+24], rbx           ; entry.val_ptr = header
+    mov     qword [r12+40], TYPE_LIST
+    mov     r14, 1                  ; auto-created = 1
+.pushloop:
+    mov     r13, 2                  ; arg index
+.pl_next:
+    cmp     r13, [rel argc]
+    jae     .done_push
+    lea     rax, [rel argv_ptrs]
+    mov     rsi, [rax + r13*8]      ; str_ptr
+    lea     rax, [rel argv_lens]
+    mov     rdx, [rax + r13*8]      ; str_len
+    mov     rdi, rbx                ; header
+    test    r15, r15
+    jnz     .ptail
+    call    list_push_head
+    jmp     .pushed
+.ptail:
+    call    list_push_tail
+.pushed:
+    test    rax, rax
+    jnz     .push_oom
+    inc     r13
+    jmp     .pl_next
+.done_push:
+    mov     rdi, [rbx+16]           ; length
+    call    reply_int
+    jmp     .ret
+.push_oom:
+    cmp     qword [rbx+16], 0       ; anything pushed yet?
+    jne     .oom
+    test    r14, r14                ; auto-created and still empty?
+    jz      .oom
+    mov     rdi, [rel argv_ptrs + 8]
+    mov     rsi, [rel argv_lens + 8]
+    call    ks_del                  ; drop the empty auto-created key
+    jmp     .oom
+.oom_del_key:
+    mov     rdi, [rel argv_ptrs + 8]
+    mov     rsi, [rel argv_lens + 8]
+    call    ks_del
+.oom:
+    call    emit_oom
+    jmp     .ret
+.wrongtype:
+    call    emit_wrongtype
+.ret:
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
+    ret
+
+; ---- LPOP / RPOP key -> bulk | nil ----
+cmd_lpop:
+    cmp     qword [rel argc], 2
+    jne     .wa
+    xor     eax, eax                ; dir = head
+    jmp     _pop_common
+.wa:
+    lea     rdi, [rel lc_lpop]
+    mov     rsi, 4
+    sub     rsp, 8
+    call    emit_wrongargs
+    add     rsp, 8
+    ret
+cmd_rpop:
+    cmp     qword [rel argc], 2
+    jne     .wa
+    mov     eax, 1                  ; dir = tail
+    jmp     _pop_common
+.wa:
+    lea     rdi, [rel lc_rpop]
+    mov     rsi, 4
+    sub     rsp, 8
+    call    emit_wrongargs
+    add     rsp, 8
+    ret
+
+; _pop_common: eax=dir. Arity already checked (==2).
+_pop_common:
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+    push    r15                     ; 5 pushes -> rsp%16==0
+    mov     r15, rax                ; dir
+    mov     rdi, [rel argv_ptrs + 8]
+    mov     rsi, [rel argv_lens + 8]
+    call    ks_lookup
+    test    rax, rax
+    jz      .miss
+    cmp     qword [rax+40], TYPE_LIST
+    jne     .wrongtype
+    mov     rbx, [rax+24]           ; header
+    mov     rdi, rbx
+    test    r15, r15
+    jnz     .ptail
+    call    list_pop_head
+    jmp     .popped
+.ptail:
+    call    list_pop_tail
+.popped:
+    test    rax, rax
+    jz      .miss                   ; empty (defensive; shouldn't happen)
+    mov     r12, rax                ; str_ptr
+    mov     r13, rdx                ; str_len
+    mov     rdi, r12
+    mov     rsi, r13
+    call    reply_bulk
+    mov     rdi, r12                ; free the popped string (caller owns it)
+    mov     rsi, r13
+    call    mem_free
+    cmp     qword [rbx+16], 0       ; list now empty?
+    jne     .ret
+    mov     rdi, [rel argv_ptrs + 8]
+    mov     rsi, [rel argv_lens + 8]
+    call    ks_del                  ; auto-delete the key
+    jmp     .ret
+.miss:
+    call    reply_null
+    jmp     .ret
+.wrongtype:
+    call    emit_wrongtype
+.ret:
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
+    ret
+
+; ---- LLEN key -> :len ----
+cmd_llen:
+    cmp     qword [rel argc], 2
+    jne     .wa
+    sub     rsp, 8                  ; align (entry 8 -> 0)
+    mov     rdi, [rel argv_ptrs + 8]
+    mov     rsi, [rel argv_lens + 8]
+    call    ks_lookup
+    test    rax, rax
+    jz      .zero
+    cmp     qword [rax+40], TYPE_LIST
+    jne     .wrongtype
+    mov     rax, [rax+24]           ; header
+    mov     rdi, [rax+16]           ; length
+    call    reply_int
+    add     rsp, 8
+    ret
+.zero:
+    xor     rdi, rdi
+    call    reply_int
+    add     rsp, 8
+    ret
+.wrongtype:
+    call    emit_wrongtype
+    add     rsp, 8
+    ret
+.wa:
+    lea     rdi, [rel lc_llen]
+    mov     rsi, 4
+    sub     rsp, 8
+    call    emit_wrongargs
+    add     rsp, 8
+    ret
+
+; ---- LRANGE key start stop -> array ----
+cmd_lrange:
+    cmp     qword [rel argc], 4
+    jne     .wa
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+    push    r15                     ; 5 pushes -> rsp%16==0
+    mov     rdi, [rel argv_ptrs + 16]
+    mov     rsi, [rel argv_lens + 16]
+    call    parse_int               ; rax=val, rdx=ok
+    test    rdx, rdx
+    jz      .notint
+    mov     r12, rax                ; start
+    mov     rdi, [rel argv_ptrs + 24]
+    mov     rsi, [rel argv_lens + 24]
+    call    parse_int
+    test    rdx, rdx
+    jz      .notint
+    mov     r13, rax                ; stop
+    mov     rdi, [rel argv_ptrs + 8]
+    mov     rsi, [rel argv_lens + 8]
+    call    ks_lookup
+    test    rax, rax
+    jz      .emptyarr
+    cmp     qword [rax+40], TYPE_LIST
+    jne     .wrongtype
+    mov     rbx, [rax+24]           ; header
+    mov     r14, [rbx+16]           ; len (>=1 for a live list)
+    test    r12, r12                ; normalize start
+    jns     .start_ok
+    add     r12, r14
+    jns     .start_ok
+    xor     r12, r12
+.start_ok:
+    test    r13, r13                ; normalize stop
+    jns     .stop_hi
+    add     r13, r14
+.stop_hi:
+    cmp     r13, r14
+    jl      .stop_ok
+    lea     r13, [r14-1]
+.stop_ok:
+    cmp     r12, r13                ; start > stop -> empty
+    jg      .emptyarr
+    cmp     r12, r14                ; start >= len -> empty
+    jge     .emptyarr
+    mov     rax, r13
+    sub     rax, r12
+    inc     rax                     ; count = stop-start+1
+    mov     r15, rax
+    mov     rdi, rax
+    call    reply_array_header
+    mov     rax, [rbx]              ; node = head
+.skip:
+    test    r12, r12
+    jle     .emit
+    mov     rax, [rax+8]            ; node = node->next
+    dec     r12
+    jmp     .skip
+.emit:
+    mov     r12, rax                ; node
+.emitloop:
+    test    r15, r15
+    jz      .ret
+    mov     rdi, [r12+16]           ; str_ptr
+    mov     rsi, [r12+24]           ; str_len
+    mov     r13, [r12+8]            ; next (save before reply)
+    call    reply_bulk
+    mov     r12, r13
+    dec     r15
+    jmp     .emitloop
+.emptyarr:
+    xor     rdi, rdi
+    call    reply_array_header      ; *0\r\n
+    jmp     .ret
+.notint:
+    call    emit_notint
+    jmp     .ret
+.wrongtype:
+    call    emit_wrongtype
+.ret:
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
+    ret
+.wa:
+    lea     rdi, [rel lc_lrange]
+    mov     rsi, 6
+    sub     rsp, 8
+    call    emit_wrongargs
+    add     rsp, 8
     ret

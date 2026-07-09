@@ -1,5 +1,5 @@
 %include "syscalls.inc"
-global ks_init, ks_get, ks_set, ks_del, ks_lookup, ks_insert
+global ks_init, ks_set, ks_del, ks_lookup, ks_insert
 extern mem_alloc, mem_free, memcmp_n, fnv1a
 extern table_alloc, table_free
 extern list_free
@@ -323,30 +323,6 @@ _del_in_table:
     add     rsp, 8
     pop     rbp
     pop     rbx
-    ret
-
-; ks_get(rdi=key, rsi=len) -> rax=val_ptr(0 miss), rdx=val_len
-ks_get:
-    push    r12
-    push    r13
-    sub     rsp, 8                  ; 2 pushes + 8 -> rsp%16==0 at calls
-    mov     r12, rdi                ; key (survive _rehash_step)
-    mov     r13, rsi                ; len
-    call    _rehash_step
-    mov     rdi, r12
-    mov     rsi, r13
-    call    _find
-    add     rsp, 8
-    pop     r13
-    pop     r12
-    test    rax, rax
-    je      .miss
-    mov     rdx, [rax+32]           ; val_len
-    mov     rax, [rax+24]           ; val_ptr
-    ret
-.miss:
-    xor     rax, rax
-    xor     rdx, rdx
     ret
 
 ; _copy_arena(rdi=src, rsi=len) -> rax = copied buf (>= len, class-sized), or 0.

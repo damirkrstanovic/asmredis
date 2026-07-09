@@ -3,8 +3,9 @@ global dispatch
 extern argc, argv_ptrs, argv_lens
 extern to_upper_buf, memcmp_n
 extern reply_simple, reply_bulk, reply_null, reply_int, append_raw
-extern ks_get, ks_set, ks_del
-extern emit_wrongargs
+extern ks_set, ks_del, ks_lookup
+extern emit_wrongargs, emit_wrongtype, emit_oom
+extern cmd_lpush, cmd_rpush, cmd_lpop, cmd_rpop, cmd_llen, cmd_lrange
 
 section .rodata
 s_pong:     db "PONG"
@@ -16,6 +17,12 @@ name_echo:  db "ECHO"
 name_set:   db "SET"
 name_get:   db "GET"
 name_del:   db "DEL"
+name_lpush:  db "LPUSH"
+name_rpush:  db "RPUSH"
+name_lpop:   db "LPOP"
+name_rpop:   db "RPOP"
+name_llen:   db "LLEN"
+name_lrange: db "LRANGE"
 uk_pre:     db "-ERR unknown command '"
 uk_pre_len  equ $ - uk_pre
 uk_mid:     db "', with args beginning with: "
@@ -27,8 +34,6 @@ lc_set:     db "set"
 lc_get:     db "get"
 lc_del:     db "del"
 lc_echo:    db "echo"
-m_oom:      db "-ERR out of memory", 13, 10
-m_oom_len   equ $ - m_oom
 
 section .bss
 cmd_upper:  resb 16
@@ -55,6 +60,10 @@ dispatch:
     je      .len4
     cmp     rax, 3
     je      .len3
+    cmp     rax, 5
+    je      .len5
+    cmp     rax, 6
+    je      .len6
     jmp     emit_unknown
 .len4:
     lea     rdi, [rel cmd_upper]
@@ -69,6 +78,24 @@ dispatch:
     call    memcmp_n
     test    rax, rax
     je      cmd_echo
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_lpop]
+    mov     rdx, 4
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_lpop
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_rpop]
+    mov     rdx, 4
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_rpop
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_llen]
+    mov     rdx, 4
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_llen
     jmp     emit_unknown
 .len3:
     lea     rdi, [rel cmd_upper]
@@ -89,6 +116,28 @@ dispatch:
     call    memcmp_n
     test    rax, rax
     je      cmd_del
+    jmp     emit_unknown
+.len5:
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_lpush]
+    mov     rdx, 5
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_lpush
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_rpush]
+    mov     rdx, 5
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_rpush
+    jmp     emit_unknown
+.len6:
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_lrange]
+    mov     rdx, 6
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_lrange
     jmp     emit_unknown
 .done:
     ret
@@ -139,9 +188,7 @@ cmd_set:
     add     rsp, 8
     ret
 .oom:
-    lea     rdi, [rel m_oom]            ; "-ERR out of memory\r\n" (already framed)
-    mov     rsi, m_oom_len
-    call    append_raw
+    call    emit_oom
     add     rsp, 8
     ret
 .wa:
@@ -152,23 +199,29 @@ cmd_set:
     add     rsp, 8
     ret
 
-; cmd_get: GET key -> bulk value or $-1 on miss.
+; cmd_get: GET key -> bulk value, $-1 on miss, WRONGTYPE if not a string.
 cmd_get:
     cmp     qword [rel argc], 2
     jne     .wa
     sub     rsp, 8
     mov     rdi, [rel argv_ptrs + 8]
     mov     rsi, [rel argv_lens + 8]
-    call    ks_get                      ; rax=val_ptr(0 miss), rdx=val_len
+    call    ks_lookup                   ; rax = entry or 0
     test    rax, rax
     je      .miss
-    mov     rdi, rax                    ; ptr (before reply_bulk clobbers rax/rdx)
-    mov     rsi, rdx                    ; len
+    cmp     qword [rax+40], TYPE_STR
+    jne     .wrongtype
+    mov     rdi, [rax+24]               ; val_ptr
+    mov     rsi, [rax+32]               ; val_len
     call    reply_bulk
     add     rsp, 8
     ret
 .miss:
     call    reply_null
+    add     rsp, 8
+    ret
+.wrongtype:
+    call    emit_wrongtype
     add     rsp, 8
     ret
 .wa:
