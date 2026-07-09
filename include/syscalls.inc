@@ -50,8 +50,15 @@
 %define EINTR              4
 %define SOCK_NONBLOCK      0x800
 %define MAX_CONNS          1024
-%define CONN_BUF_SIZE      16384
+%define CONN_BUF_SIZE      16384        ; per-conn READ buffer slot
 %define CONN_BUF_SHIFT     14
+; Per-conn WRITE buffer slot. Must exceed the largest single reply so the
+; EPOLLOUT backpressure stash can never overflow into the next fd's slot.
+; Max reply is the unknown-command error re-emitting a ~16370-byte argument
+; plus ~53 bytes of framing = ~16423 (< READ_BUF_SIZE+64=16448). 32768 gives
+; ample margin and stays a power of two so addressing is a single shift.
+%define WRITE_BUF_SIZE     32768
+%define WRITE_BUF_SHIFT    15
 %define CONN_STATE_SZ      32
 %define CONN_STATE_SHIFT   5
 %define MAX_EVENTS         256

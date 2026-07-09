@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
-# Sends N pipelined GETs for a pre-set key, then reads replies SLOWLY in small
-# chunks with delays, forcing the server's send buffer to fill and exercising the
-# EPOLLOUT backpressure path. Verifies every reply byte is correct and in order.
+# Sends N pipelined GETs for a pre-set key, then reads replies SLOWLY, forcing
+# the server's send buffer to fill and exercising the EPOLLOUT backpressure
+# path. A small SO_RCVBUF bounds the in-flight window so backpressure engages
+# after only ~1 MB (instead of needing to exceed the multi-MB autotuned
+# buffers), keeping the test fast while still driving the stash / EPOLLOUT /
+# on_writable code. Verifies every reply byte is correct and in order.
 import socket, sys, time
 port = int(sys.argv[1]); n = int(sys.argv[2]); val = sys.argv[3].encode()
-s = socket.create_connection(("127.0.0.1", port))
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 16384)  # small window -> quick backpressure
+s.connect(("127.0.0.1", port))
 s.sendall(b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$%d\r\n%s\r\n" % (len(val), val))
 assert s.recv(64).startswith(b"+OK"), "SET failed"
 req = b"*2\r\n$3\r\nGET\r\n$1\r\nk\r\n" * n
@@ -12,8 +17,8 @@ s.sendall(req)
 want = (b"$%d\r\n%s\r\n" % (len(val), val)) * n
 got = b""
 while len(got) < len(want):
-    time.sleep(0.005)
-    chunk = s.recv(256)
+    time.sleep(0.003)                      # slower than the server produces -> buffer fills
+    chunk = s.recv(8192)
     if not chunk: break
     got += chunk
 s.close()

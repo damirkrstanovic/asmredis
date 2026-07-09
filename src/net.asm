@@ -91,9 +91,12 @@ net_serve:
     mov     [rel g_epfd], rax            ; and a stable copy for ep_ctl, since
                                          ; drain/flush_reply clobber r12 as scratch
 
-    ; mmap two per-conn buffer regions
+    ; mmap the per-conn buffer regions (read slots are 16 KiB, write slots are
+    ; 32 KiB so a stashed reply can never overflow its slot).
+    mov     rsi, MAX_CONNS*CONN_BUF_SIZE
     call    map_region
     mov     [rel read_base], rax
+    mov     rsi, MAX_CONNS*WRITE_BUF_SIZE
     call    map_region
     mov     [rel write_base], rax
 
@@ -173,13 +176,13 @@ net_fail:
     syscall
 
 ; ============================================================================
-; map_region -> rax = base of a MAX_CONNS*CONN_BUF_SIZE anon region. Fatal on err.
-; Clobbers only caller-saved regs.
+; map_region(rsi=size) -> rax = base of an anon region of `size` bytes. Fatal on err.
+; Clobbers only caller-saved regs.  rsi = region size in bytes (caller-provided).
 ; ============================================================================
 map_region:
     mov     rax, SYS_mmap
     xor     rdi, rdi                     ; addr = NULL
-    mov     rsi, MAX_CONNS*CONN_BUF_SIZE
+                                         ; rsi = size (set by caller)
     mov     rdx, PROT_RW
     mov     r10, MAP_ANON_PRIV
     mov     r8, -1                       ; fd
@@ -380,8 +383,8 @@ drain:
 ; pressure engaged (or conn closed on error). Non-blocking: on EAGAIN it
 ; stashes the unwritten tail into write_base[fd], records wr_pos/wr_len, sets
 ; ST_WATCH_OUT and MODs the epoll interest to EPOLLOUT (dropping EPOLLIN so the
-; loop never busy-spins). `len` is a single reply <= CONN_BUF_SIZE, so the tail
-; always fits the 16KB write buffer.
+; loop never busy-spins). `len` is a single reply (max ~16423 bytes), which fits
+; the WRITE_BUF_SIZE (32 KiB) slot with margin, so the stash never overflows.
 ;   rbx = fd, r12 = cursor (buf+written), r13 = remaining (all saved).
 ; ============================================================================
 flush_reply:
@@ -418,10 +421,10 @@ flush_reply:
 .eagain:
     ; stash unwritten tail: memcpy(write_base[fd] + 0, cursor, remaining)
     mov     rdi, rbx
-    shl     rdi, CONN_BUF_SHIFT
+    shl     rdi, WRITE_BUF_SHIFT         ; write slots are WRITE_BUF_SIZE (32 KiB)
     add     rdi, [rel write_base]        ; dest = write buffer for fd
     mov     rsi, r12                     ; src  = unwritten tail
-    mov     rcx, r13                     ; count = remaining (<= CONN_BUF_SIZE)
+    mov     rcx, r13                     ; count = remaining (<= max reply < WRITE_BUF_SIZE)
     rep     movsb
     ; conn_state[fd]: wr_pos=0, wr_len=remaining, flags |= ST_WATCH_OUT
     lea     rax, [rel conn_state]
@@ -466,7 +469,7 @@ on_writable:
     sub     rdx, r8                      ; rem = wr_len - wr_pos
     ; src = write_base[fd] + wr_pos
     mov     rsi, rbx
-    shl     rsi, CONN_BUF_SHIFT
+    shl     rsi, WRITE_BUF_SHIFT         ; write slots are WRITE_BUF_SIZE (32 KiB)
     add     rsi, [rel write_base]
     add     rsi, r8
     mov     rdi, rbx                     ; fd

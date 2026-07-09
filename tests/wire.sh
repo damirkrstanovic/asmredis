@@ -104,9 +104,18 @@ fi
 # --- Milestone C: backpressure / EPOLLOUT path (slow reader, large-ish value) ---
 ./asmredis 7777 & SRV=$!; sleep 0.3
 bigval=$(python3 -c "print('x'*4000, end='')")
-if python3 tests/slow_reader.py 7777 2000 "$bigval" >/tmp/asmc_slow.txt 2>&1; then
+if python3 tests/slow_reader.py 7777 500 "$bigval" >/tmp/asmc_slow.txt 2>&1; then
   echo "PASS backpressure"
 else
   echo "FAIL backpressure: $(cat /tmp/asmc_slow.txt)"; kill $SRV 2>/dev/null; exit 1
+fi
+kill $SRV 2>/dev/null
+
+# --- Milestone C: large (>16KB) replies under backpressure must not overflow write buffer ---
+./asmredis 7777 & SRV=$!; sleep 0.3
+if python3 tests/big_reply.py 7777 100 >/tmp/asmc_big.txt 2>&1; then
+  echo "PASS big-reply-backpressure"
+else
+  echo "FAIL big-reply-backpressure: $(cat /tmp/asmc_big.txt)"; kill $SRV 2>/dev/null; exit 1
 fi
 kill $SRV 2>/dev/null
