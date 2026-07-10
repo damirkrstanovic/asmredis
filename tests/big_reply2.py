@@ -60,20 +60,24 @@ def main():
     try:
         # ---- 1) >32KB reply under a slow reader (small SO_RCVBUF forces EAGAIN) ----
         s=conn(port, rcvbuf=4096); r=R(s)
-        exp=build_hash(s, r, "H32", 2000, 12)     # ~2000*(f + 12B val + framing) ~ 44KB
+        exp=build_hash(s, r, "H32", 2000, 12)     # ~57KB reply: >32KB base slot, fits the old 64KB build buffer (build-safe, exercises the >32KB path)
         s.sendall(cmd("HGETALL","H32"))
         a=arr(r)
         got=dict(zip(a[0::2],a[1::2]))
         if got!=exp: print("FAIL >32KB HGETALL mismatch (n=%d)"%len(got)); return 1
         # ---- 2) >64KB reply (exceeds the old 64KB build buffer too) ----
-        exp2=build_hash(s, r, "H64", 3000, 30)    # ~3000*(f + 30B + framing) ~ 130KB
+        exp2=build_hash(s, r, "H64", 3000, 30)    # ~137KB reply: >64KB — overflows the old build buffer during construction (the deterministic pre-fix crash)
         s.sendall(cmd("HGETALL","H64"))
         a2=arr(r)
         got2=dict(zip(a2[0::2],a2[1::2]))
         if got2!=exp2: print("FAIL >64KB HGETALL mismatch (n=%d)"%len(got2)); return 1
         s.close()
-        # ---- 3) cross-connection integrity: A drains a huge reply slowly while B
-        #         interleaves small commands; B's replies must stay correct ----
+        # ---- 3) cross-connection integrity: connection A backpressured on a large
+        #         reply while B interleaves small commands; on the fixed code both stay
+        #         byte-correct (concurrent-integrity smoke check). The old code's
+        #         deterministic failure is the >64KB build overflow above; the 32KB-stash
+        #         neighbor-corruption is layout/timing-dependent and not reliably
+        #         reproducible here. ----
         A=conn(port, rcvbuf=4096); ra=R(A)
         expA=build_hash(A, ra, "HA", 4000, 40)    # ~large
         A.sendall(cmd("HGETALL","HA"))            # A now backpressured mid-drain
