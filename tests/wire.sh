@@ -266,3 +266,15 @@ fi
 kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
 
 [ $hs -eq 0 ] || exit 1
+
+# --- Milestone G: large replies under backpressure + cross-connection integrity ---
+./asmredis 7777 & SRV=$!
+for _i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/7777) 2>/dev/null && { exec 3>&- 3<&-; break; }; sleep 0.1; done
+if timeout 60 python3 tests/big_reply2.py 7777 >/tmp/asmg_big.txt 2>&1; then
+  echo "PASS big-reply-grow"; bg=0
+else
+  echo "FAIL big-reply-grow: $(cat /tmp/asmg_big.txt)"; bg=1
+fi
+kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
+
+[ $bg -eq 0 ] || exit 1
