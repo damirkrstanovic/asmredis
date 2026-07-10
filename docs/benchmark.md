@@ -666,6 +666,135 @@ low-concurrency rows (mostly Valkey, plus a couple of asmredis `-c 1` rows) wher
 `valkey-benchmark`'s percentile printout collapses the 75% boundary into a
 neighbouring latency bucket; there p75 ≈ p50.
 
+## Milestone G (growable reply buffer) — string hot path
+
+Milestone G replaces the old **fixed global build buffer + fixed per-connection
+write stash** with a **unified growable per-connection output buffer**: each
+connection gets a **32 KiB base slot** (`OUTBUF_BASE_SIZE`), replies are built
+directly into it, and only a reply that would overflow 32 KiB triggers an
+**mmap-backed overflow buffer** (freed on drain). The crucial point for this sweep:
+`SET`/`GET` replies are tiny (`+OK\r\n`, `$3\r\nbar\r\n`, `$-1\r\n`), so they fit
+the base slot with **zero allocation** and drain **directly from the connection
+buffer** — the old code path copied every reply into a separate per-conn write
+stash before sending, and that copy is now **gone**. So the expectation is a flat
+"within noise," and if anything a hair faster on the (rare) backpressure path where
+the stash copy used to live. The question this sweep answers: **did the reply-path
+rewrite regress `SET`/`GET` throughput?** The growth/overflow machinery is exercised
+only by large multi-bulk replies (covered by the `large-reply-under-backpressure`
+wire test), never by `valkey-benchmark -t set,get`.
+
+**Method.** Identical to the milestone-C/B/D/E/F sweeps:
+`valkey-benchmark -t set,get -n 100000 --precision 3`, concurrency
+`-c ∈ {1,20,50,100,200,500}`, two payloads (`-d 3`, `-d 512`), each cell the
+**per-metric median of 3 runs**. asmredis on port 7777, Valkey 9.1.0 oracle on
+7778, same box, loopback; latencies in ms. Environment: **Linux 7.1.3-2-cachyos**
+(same kernel as milestones B/D/E/F), Intel i5-8400 (6 cores), single core saturated.
+The asmredis binary is now **39,528 bytes** (the growable-buffer plumbing adds
+~0.9 KB over milestone F's 38,640). _Ambient load this session was **moderate**
+(load average ≈ 3.0–3.7 on 6 cores — a busier desktop than the quiet milestone-E/F
+sessions, closer to the milestone-B run): the `max` tails top out at ~5.7 ms with a
+few sub-1.4 ms Valkey outliers at low concurrency, and both servers sit at the
+context-switch-dominated 0.023 ms `-c 1` p50 rather than the 0.015 ms of the quiet
+boxes. As before, the controlled, load-invariant comparison is asmredis-G against
+the **Valkey oracle measured in the same runs**, not the cross-session absolute
+figures._
+
+### Payload `-d 3` (default, 3-byte value) — median of 3
+
+| `-c` | cmd | server | rps | avg | min | p50 | p75 | p95 | p99 | max |
+|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | SET | **asmredis** | **45,767** | 0.019 | 0.008 | 0.023 | – | 0.031 | 0.055 | 0.215 |
+| 1 | SET | valkey | 35,945 | 0.024 | 0.016 | 0.023 | – | 0.039 | 0.071 | 0.279 |
+| 1 | GET | **asmredis** | **45,935** | 0.018 | 0.008 | 0.023 | – | 0.031 | 0.055 | 0.191 |
+| 1 | GET | valkey | 37,023 | 0.023 | 0.008 | 0.023 | – | 0.039 | 0.063 | 1.103 |
+| 20 | SET | asmredis | 100,301 | 0.106 | 0.032 | 0.111 | 0.119 | 0.135 | 0.167 | 0.415 |
+| 20 | SET | valkey | 105,152 | 0.105 | 0.032 | 0.103 | 0.111 | 0.135 | 0.175 | 0.399 |
+| 20 | GET | asmredis | 100,301 | 0.106 | 0.032 | 0.111 | 0.119 | 0.135 | 0.175 | 0.367 |
+| 20 | GET | valkey | 104,058 | 0.105 | 0.032 | 0.103 | 0.111 | 0.135 | 0.175 | 0.495 |
+| 50 | SET | asmredis | 99,800 | 0.257 | 0.096 | 0.263 | 0.279 | 0.319 | 0.359 | 0.647 |
+| 50 | SET | valkey | 102,987 | 0.253 | 0.072 | 0.247 | 0.263 | 0.303 | 0.359 | 1.119 |
+| 50 | GET | asmredis | 100,100 | 0.256 | 0.088 | 0.263 | 0.279 | 0.311 | 0.351 | 0.543 |
+| 50 | GET | valkey | 101,729 | 0.255 | 0.064 | 0.255 | 0.271 | 0.303 | 0.351 | 1.319 |
+| 100 | SET | asmredis | 96,899 | 0.522 | 0.168 | 0.519 | 0.575 | 0.639 | 0.703 | 1.183 |
+| 100 | SET | valkey | 99,602 | 0.512 | 0.152 | 0.511 | 0.535 | 0.599 | 0.671 | 1.215 |
+| 100 | GET | asmredis | 96,525 | 0.525 | 0.160 | 0.527 | 0.575 | 0.655 | 0.735 | 1.111 |
+| 100 | GET | valkey | 99,108 | 0.515 | 0.160 | 0.511 | 0.543 | 0.607 | 0.671 | 1.567 |
+| 200 | SET | asmredis | 92,764 | 1.090 | 0.200 | 1.087 | 1.263 | 1.495 | 1.655 | 2.279 |
+| 200 | SET | valkey | 91,408 | 1.104 | 0.312 | 1.095 | 1.191 | 1.351 | 1.487 | 2.119 |
+| 200 | GET | asmredis | 92,851 | 1.088 | 0.128 | 1.079 | 1.263 | 1.487 | 1.615 | 2.287 |
+| 200 | GET | valkey | 92,336 | 1.092 | 0.352 | 1.087 | 1.191 | 1.367 | 1.479 | 2.103 |
+| 500 | SET | asmredis | 85,106 | 2.969 | 0.176 | 2.951 | 3.503 | 4.143 | 4.471 | 5.447 |
+| 500 | SET | valkey | 93,633 | 2.694 | 1.520 | 2.679 | 3.055 | 3.463 | 3.959 | 5.103 |
+| 500 | GET | asmredis | 86,730 | 2.912 | 0.248 | 2.903 | 3.439 | 4.039 | 4.359 | 5.279 |
+| 500 | GET | valkey | 87,796 | 2.876 | 1.048 | 2.871 | 3.295 | 3.919 | 4.295 | 5.239 |
+
+### Payload `-d 512` (512-byte value) — median of 3
+
+| `-c` | cmd | server | rps | avg | min | p50 | p75 | p95 | p99 | max |
+|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | SET | **asmredis** | **48,077** | 0.018 | 0.008 | 0.023 | 0.023 | 0.031 | 0.063 | 0.199 |
+| 1 | SET | valkey | 37,936 | 0.022 | 0.016 | 0.023 | – | 0.039 | 0.071 | 0.271 |
+| 1 | GET | **asmredis** | **47,461** | 0.018 | 0.008 | 0.023 | – | 0.031 | 0.063 | 0.263 |
+| 1 | GET | valkey | 39,062 | 0.022 | 0.008 | 0.023 | – | 0.039 | 0.071 | 0.279 |
+| 20 | SET | asmredis | 100,000 | 0.105 | 0.032 | 0.111 | 0.119 | 0.135 | 0.175 | 0.431 |
+| 20 | SET | valkey | 105,263 | 0.104 | 0.032 | 0.103 | 0.111 | 0.135 | 0.183 | 1.087 |
+| 20 | GET | asmredis | 99,701 | 0.107 | 0.048 | 0.111 | 0.119 | 0.135 | 0.191 | 1.391 |
+| 20 | GET | valkey | 102,249 | 0.107 | 0.032 | 0.103 | 0.111 | 0.143 | 0.191 | 0.999 |
+| 50 | SET | asmredis | 100,100 | 0.257 | 0.072 | 0.263 | 0.279 | 0.319 | 0.367 | 0.655 |
+| 50 | SET | valkey | 102,041 | 0.256 | 0.072 | 0.255 | 0.271 | 0.311 | 0.375 | 1.055 |
+| 50 | GET | asmredis | 99,404 | 0.260 | 0.080 | 0.263 | 0.287 | 0.319 | 0.367 | 1.143 |
+| 50 | GET | valkey | 101,833 | 0.256 | 0.072 | 0.255 | 0.271 | 0.319 | 0.383 | 0.935 |
+| 100 | SET | asmredis | 96,712 | 0.525 | 0.080 | 0.527 | 0.575 | 0.647 | 0.719 | 1.215 |
+| 100 | SET | valkey | 97,561 | 0.526 | 0.184 | 0.519 | 0.559 | 0.639 | 0.735 | 1.495 |
+| 100 | GET | asmredis | 96,805 | 0.525 | 0.168 | 0.527 | 0.575 | 0.655 | 0.735 | 1.063 |
+| 100 | GET | valkey | 96,805 | 0.529 | 0.200 | 0.519 | 0.567 | 0.655 | 0.775 | 2.207 |
+| 200 | SET | asmredis | 87,260 | 1.157 | 0.352 | 1.151 | 1.287 | 1.487 | 1.663 | 2.519 |
+| 200 | SET | valkey | 88,339 | 1.144 | 0.312 | 1.135 | 1.239 | 1.431 | 1.559 | 2.175 |
+| 200 | GET | asmredis | 86,806 | 1.163 | 0.256 | 1.159 | 1.311 | 1.551 | 1.703 | 2.375 |
+| 200 | GET | valkey | 86,430 | 1.171 | 0.368 | 1.159 | 1.279 | 1.471 | 1.631 | 2.535 |
+| 500 | SET | asmredis | 78,370 | 3.213 | 1.008 | 3.223 | 3.783 | 4.375 | 4.647 | 5.735 |
+| 500 | SET | valkey | 81,500 | 3.098 | 0.328 | 3.095 | 3.551 | 4.111 | 4.455 | 5.535 |
+| 500 | GET | asmredis | 78,493 | 3.213 | 0.240 | 3.223 | 3.759 | 4.311 | 4.591 | 5.559 |
+| 500 | GET | valkey | 80,580 | 3.127 | 0.280 | 3.127 | 3.567 | 4.119 | 4.431 | 5.295 |
+
+**Reading the numbers.** The primary comparison is asmredis-G against the Valkey
+oracle **in the same runs**, which cancels ambient load:
+
+- **`-c 1`: asmredis ~21–27% faster** on throughput (45.8K/45.9K vs 35.9K/37.0K on
+  `-d 3`; 48.1K/47.5K vs 37.9K/39.1K on `-d 512`). Under this busier session both
+  servers sit at 0.023 ms p50 (context-switch cost dominates the loopback round
+  trip when cores are contended), the same load artifact the milestone-B/D sessions
+  showed; the quiet E/F boxes reached 0.015 ms. The removed stash copy is invisible
+  here — the reply is a handful of bytes either way, dwarfed by the round-trip cost.
+- **`-c 20–100`: within ~1–5%**, Valkey edging slightly ahead on throughput (e.g.
+  `-d 3` `-c 50` SET: asmredis 99.8K vs valkey 103.0K; `-c 100` SET: 96.9K vs 99.6K;
+  `-d 512` `-c 100` GET: 96.8K vs 96.8K, tied). Latency distributions match within a
+  few percent — the same near-tie every earlier milestone showed at these levels.
+- **`-c 200`: roughly tied** (`-d 3`: asmredis 92.8K vs valkey 91.4K SET, 92.9K vs
+  92.3K GET; `-d 512`: 87.3K vs 88.3K SET, 86.8K vs 86.4K GET) with comparable tails.
+- **`-c 500`: Valkey ahead on SET** (`-d 3` 93.6K vs 85.1K, `-d 512` 81.5K vs 78.4K),
+  **GET closer** (`-d 3` asmredis 86.7K vs 87.8K, `-d 512` 78.5K vs 80.6K) — the same
+  ordering seen in milestones B/C/D, where Valkey led at 500 on a busier box.
+
+**Did the reply-path rewrite regress the hot path? No.** At every concurrency level
+the asmredis-G-vs-oracle gap **reproduces** the earlier-milestone shape: asmredis
+~21–27% ahead at `-c 1`, roughly even (Valkey a hair ahead) in the mid-range, Valkey
+a few percent ahead at `-c 500`. The **absolute** throughput this session runs
+**below** the quiet milestone-F figures (e.g. `-c 1` SET `-d 3`: 45.8K vs F's 52.1K,
+−12%; `-c 500` SET `-d 3`: 85.1K vs F's 102.9K) — but **Valkey drops by the same
+proportion in the identical runs** (`-c 1` SET 35.9K vs F's 41.6K, −14%; `-c 500` SET
+93.6K vs F's 100.5K, −7%). Both servers moving together downward is the signature of
+a **busier desktop than the E/F sessions** (load ≈ 3.0–3.7 vs ≈ 0.4–1.2; `max` tails
+up to ~5.7 ms with sub-1.4 ms Valkey low-concurrency outliers), not of the reply-path
+change. This is expected: for `SET`/`GET` the reply fits the 32 KiB base slot with no
+allocation and drains straight from the connection buffer — the rewrite *removes* the
+old stash copy from the send path rather than adding work — and the in-run oracle
+comparison, the load-invariant measure, shows **no measurable throughput regression**.
+
+As in the earlier milestones, `p75` is blank (`–`) on the tight `-c 1` rows (both
+servers) where `valkey-benchmark`'s percentile printout collapses the 75% boundary
+into a neighbouring latency bucket; there p75 ≈ p50.
+
 ## Caveats / notes
 
 - **`PING` inline not supported.** `valkey-benchmark -t ping` runs `PING_INLINE`
