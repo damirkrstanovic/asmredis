@@ -314,7 +314,7 @@ cmd_del:
     add     rsp, 8
     ret
 
-; emit_unknown: append the valkey-exact unknown-command error to out_buf.
+; emit_unknown: append the valkey-exact unknown-command error to the reply buffer.
 ;   -ERR unknown command '<argv0>', with args beginning with: '<a1>' '<a2>' \r\n
 ; Uses rbx (callee-saved) for the loop index because append_raw clobbers r10.
 emit_unknown:

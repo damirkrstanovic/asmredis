@@ -18,7 +18,7 @@ m_oom2:          db "-ERR out of memory", 13, 10
 m_oom2_len       equ $ - m_oom2
 
 section .text
-; emit_protoerr: append "-ERR Protocol error\r\n" to out_buf.
+; emit_protoerr: append "-ERR Protocol error\r\n" to the reply buffer.
 emit_protoerr:
     lea     rdi, [rel m_proto]
     mov     rsi, m_proto_len

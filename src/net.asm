@@ -392,6 +392,7 @@ _send:
     syscall
     test    rax, rax
     js      .werr
+    jz      .eagain                      ; write()==0 (shouldn't happen): wait for EPOLLOUT
     add     [r14+8], rax                 ; out_pos += n
     jmp     .w
 .full:
