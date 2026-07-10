@@ -66,9 +66,7 @@ _start:
     syscall
 
 section .bss
-global out_buf, out_len, argc, argv_ptrs, argv_lens
-out_buf:    resb OUT_BUF_SIZE
-out_len:    resq 1
+global argc, argv_ptrs, argv_lens
 argc:       resq 1
 argv_ptrs:  resq MAX_ARGS
 argv_lens:  resq MAX_ARGS

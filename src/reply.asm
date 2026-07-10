@@ -1,7 +1,7 @@
 %include "syscalls.inc"
 global reply_simple, reply_bulk, reply_null, reply_int, reply_err, append_raw
 global reply_array_header
-extern out_buf, out_len
+extern cur_out, cur_cap, cur_len, cur_err
 extern itoa_u
 
 section .rodata
@@ -9,34 +9,53 @@ null_bulk:     db "$-1", 13, 10
 null_bulk_len: equ $ - null_bulk
 
 section .text
-; ---- internal helpers (append to out_buf at [out_len]) ----
+; ---- internal helpers (append to cur_out at [cur_len], bounds-checked) ----
 
 _put_byte:                       ; r8b = byte
-    lea     r11, [rel out_buf]
-    mov     rax, [rel out_len]
+    mov     rax, [rel cur_len]
+    cmp     rax, [rel cur_cap]   ; room for 1 more byte? (need cur_len < cur_cap)
+    jae     .oom
+    mov     r11, [rel cur_out]
     mov     [r11+rax], r8b
     inc     rax
-    mov     [rel out_len], rax
+    mov     [rel cur_len], rax
+    ret
+.oom:
+    mov     qword [rel cur_err], 1
     ret
 
 _put_bytes:                      ; rdi=src, rsi=len
-    lea     r11, [rel out_buf]
-    mov     rax, [rel out_len]
-    lea     r10, [r11+rax]        ; dest = out_buf + out_len
+    mov     rax, [rel cur_len]
+    mov     rdx, rax
+    add     rdx, rsi             ; cur_len + n
+    cmp     rdx, [rel cur_cap]
+    ja      .oom                 ; would exceed cap
+    mov     r11, [rel cur_out]
+    lea     r10, [r11+rax]       ; dest = cur_out + cur_len
     mov     rcx, rsi
     push    rsi
-    mov     rsi, rdi              ; src
-    mov     rdi, r10              ; dest
+    mov     rsi, rdi             ; src
+    mov     rdi, r10             ; dest
     rep     movsb
     pop     rsi
-    add     [rel out_len], rsi
+    add     [rel cur_len], rsi
+    ret
+.oom:
+    mov     qword [rel cur_err], 1
     ret
 
 _put_crlf:
-    lea     r11, [rel out_buf]
-    mov     rax, [rel out_len]
+    mov     rax, [rel cur_len]
+    mov     rdx, rax
+    add     rdx, 2
+    cmp     rdx, [rel cur_cap]
+    ja      .oom
+    mov     r11, [rel cur_out]
     mov     word [r11+rax], 0x0a0d ; bytes 0d 0a
-    add     qword [rel out_len], 2
+    add     qword [rel cur_len], 2
+    ret
+.oom:
+    mov     qword [rel cur_err], 1
     ret
 
 _put_uint:                       ; rdi=value

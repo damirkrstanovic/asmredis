@@ -26,7 +26,6 @@
 %define PORT_DEFAULT    6379
 %define ARENA_SIZE      (64*1024*1024)
 %define READ_BUF_SIZE   16384
-%define OUT_BUF_SIZE    65536
 %define MAX_ARGS        128
 %define DICT_INITIAL     4          ; initial hashtable buckets (Redis default)
 %define REHASH_MAX_EMPTY 10         ; empty buckets skipped per rehash step
@@ -53,15 +52,10 @@
 %define MAX_CONNS          1024
 %define CONN_BUF_SIZE      16384        ; per-conn READ buffer slot
 %define CONN_BUF_SHIFT     14
-; Per-conn WRITE buffer slot. Must exceed the largest single reply so the
-; EPOLLOUT backpressure stash can never overflow into the next fd's slot.
-; Max reply is the unknown-command error re-emitting a ~16370-byte argument
-; plus ~53 bytes of framing = ~16423 (< READ_BUF_SIZE+64=16448). 32768 gives
-; ample margin and stays a power of two so addressing is a single shift.
-%define WRITE_BUF_SIZE     32768
-%define WRITE_BUF_SHIFT    15
-%define CONN_STATE_SZ      32
-%define CONN_STATE_SHIFT   5
+%define OUTBUF_BASE_SIZE   65536        ; per-conn output buffer base slot (Task 2 -> 32768)
+%define OUTBUF_BASE_SHIFT  16           ; (Task 2 -> 15)
+%define CONN_STATE_SZ      64
+%define CONN_STATE_SHIFT   6
 %define MAX_EVENTS         256
 %define EV_SIZE            12
 %define ST_IN_USE          1
