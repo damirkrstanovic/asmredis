@@ -369,6 +369,16 @@ drain:
     jnz     .loop
     jmp     .fin
 .err_close:
+    ; a grow may have allocated an overflow mmap that was never persisted into
+    ; ST_OUT_MMAP (persist runs only on the success branch), so close_conn won't
+    ; free it — munmap the in-flight buffer here (guarded by cur_mmap).
+    cmp     qword [rel cur_mmap], 0
+    je      .ec_close
+    mov     rax, SYS_munmap
+    mov     rdi, [rel cur_out]
+    mov     rsi, [rel cur_cap]
+    syscall
+.ec_close:
     mov     edi, ebx
     call    close_conn
 .fin:
