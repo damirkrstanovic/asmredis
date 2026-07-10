@@ -2,11 +2,12 @@
 global ks_init, ks_set, ks_del, ks_lookup, ks_insert
 extern mem_alloc, mem_free, memcmp_n, fnv1a
 extern table_alloc, table_free
-extern list_free
+extern list_free, hash_free
 
 ; Hashtable entry layout (48 bytes, ENTRY_SZ):
 ;   [0]=next_ptr  [8]=key_ptr  [16]=key_len  [24]=val_ptr  [32]=val_len  [40]=type
-;   type: TYPE_STR(0) = val_ptr/val_len are a string; TYPE_LIST(1) = val_ptr is a list header
+;   type: TYPE_STR(0)=val_ptr/val_len are a string; TYPE_LIST(1)=val_ptr is a list header;
+;         TYPE_HASH(2)=val_ptr is a hash header
 ;
 ; Incremental (Redis-style) dict. Two tables held as index-[0]/[1] arrays so the
 ; finish-swap is a field copy. rehashidx = -1 when idle, else the next ht[0]
@@ -465,22 +466,32 @@ ks_del:
 
 ; _free_value(rdi=entry): free the entry's VALUE only (not entry/key), dispatched
 ; on type. A null val_ptr (an entry created by ks_insert before its value is
-; filled) is treated as "nothing to free". Preserves all callee-saved registers.
+; filled) is a no-op on every branch. Preserves all callee-saved registers.
 _free_value:
     push    rbx                     ; entry 8 -> 0 (call aligned)
     mov     rbx, rdi
-    cmp     qword [rbx+40], TYPE_STR
-    jne     .list
+    mov     rax, [rbx+40]           ; type
+    cmp     rax, TYPE_STR
+    je      .str
+    cmp     rax, TYPE_LIST
+    je      .list
+    ; TYPE_HASH
+    mov     rdi, [rbx+24]           ; hash header
+    test    rdi, rdi
+    jz      .done
+    call    hash_free
+    jmp     .done
+.str:
     mov     rdi, [rbx+24]           ; val_ptr
     test    rdi, rdi
-    jz      .done                   ; no value allocated yet -> nothing to free
+    jz      .done
     mov     rsi, [rbx+32]           ; val_len
     call    mem_free
     jmp     .done
 .list:
     mov     rdi, [rbx+24]           ; list header
     test    rdi, rdi
-    jz      .done                   ; null header (defensive) -> nothing to free
+    jz      .done
     call    list_free
 .done:
     pop     rbx
