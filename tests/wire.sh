@@ -114,6 +114,39 @@ check RPUSH solo only
 check LPOP solo
 check LLEN solo
 check GET solo
+check HSET hh f1 a f2 b f3 c
+check HGETALL hh
+check HSET hh f1 z f4 d
+check HGETALL hh
+check HGET hh f1
+check HGET hh nope
+check HLEN hh
+check HEXISTS hh f2
+check HEXISTS hh nope
+check HKEYS hh
+check HVALS hh
+check HDEL hh f2 f3 nope
+check HGETALL hh
+check HLEN nokey
+check HGET nokey f
+check HGETALL nokey
+check HKEYS nokey
+check HVALS nokey
+check HEXISTS nokey f
+check GET hh
+check LPUSH hh x
+check HSET hh
+check HSET hh onlyfield
+check HSET
+check HEXISTS hh
+check HGETALL
+check SET hs str
+check HGET hs f
+check HDEL solo2 f
+check HSET solo2 f v
+check HDEL solo2 f
+check HLEN solo2
+check GET solo2
 kill $SRV 2>/dev/null
 valkey-cli -p 7778 shutdown nosave 2>/dev/null
 [ "$fail" = "0" ] && echo "PASS conformance" || { echo "FAIL conformance"; exit 1; }
@@ -221,3 +254,15 @@ fi
 kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
 
 [ $ls -eq 0 ] || exit 1
+
+# --- Milestone F: HASH stress + leak ---
+./asmredis 7777 & SRV=$!
+for _i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/7777) 2>/dev/null && { exec 3>&- 3<&-; break; }; sleep 0.1; done
+if timeout 60 python3 tests/hash.py 7777 >/tmp/asmf_hash.txt 2>&1; then
+  echo "PASS hash-stress"; hs=0
+else
+  echo "FAIL hash-stress: $(cat /tmp/asmf_hash.txt)"; hs=1
+fi
+kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
+
+[ $hs -eq 0 ] || exit 1
