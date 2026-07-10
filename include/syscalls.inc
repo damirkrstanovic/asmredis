@@ -32,6 +32,7 @@
 %define REHASH_MAX_EMPTY 10         ; empty buckets skipped per rehash step
 %define TYPE_STR   0
 %define TYPE_LIST  1
+%define TYPE_HASH  2
 %define ENTRY_SZ   48          ; entry incl. type field (still class 64)
 
 ; ---- milestone C: epoll / non-blocking ----
