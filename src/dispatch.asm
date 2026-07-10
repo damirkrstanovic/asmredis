@@ -6,6 +6,8 @@ extern reply_simple, reply_bulk, reply_null, reply_int, append_raw
 extern ks_set, ks_del, ks_lookup
 extern emit_wrongargs, emit_wrongtype, emit_oom
 extern cmd_lpush, cmd_rpush, cmd_lpop, cmd_rpop, cmd_llen, cmd_lrange
+extern cmd_hset, cmd_hget, cmd_hdel, cmd_hgetall, cmd_hlen
+extern cmd_hexists, cmd_hkeys, cmd_hvals
 
 section .rodata
 s_pong:     db "PONG"
@@ -23,6 +25,14 @@ name_lpop:   db "LPOP"
 name_rpop:   db "RPOP"
 name_llen:   db "LLEN"
 name_lrange: db "LRANGE"
+name_hset:    db "HSET"
+name_hget:    db "HGET"
+name_hdel:    db "HDEL"
+name_hlen:    db "HLEN"
+name_hkeys:   db "HKEYS"
+name_hvals:   db "HVALS"
+name_hgetall: db "HGETALL"
+name_hexists: db "HEXISTS"
 uk_pre:     db "-ERR unknown command '"
 uk_pre_len  equ $ - uk_pre
 uk_mid:     db "', with args beginning with: "
@@ -64,6 +74,8 @@ dispatch:
     je      .len5
     cmp     rax, 6
     je      .len6
+    cmp     rax, 7
+    je      .len7
     jmp     emit_unknown
 .len4:
     lea     rdi, [rel cmd_upper]
@@ -96,6 +108,30 @@ dispatch:
     call    memcmp_n
     test    rax, rax
     je      cmd_llen
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_hget]
+    mov     rdx, 4
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_hget
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_hset]
+    mov     rdx, 4
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_hset
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_hdel]
+    mov     rdx, 4
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_hdel
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_hlen]
+    mov     rdx, 4
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_hlen
     jmp     emit_unknown
 .len3:
     lea     rdi, [rel cmd_upper]
@@ -130,6 +166,18 @@ dispatch:
     call    memcmp_n
     test    rax, rax
     je      cmd_rpush
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_hkeys]
+    mov     rdx, 5
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_hkeys
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_hvals]
+    mov     rdx, 5
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_hvals
     jmp     emit_unknown
 .len6:
     lea     rdi, [rel cmd_upper]
@@ -138,6 +186,20 @@ dispatch:
     call    memcmp_n
     test    rax, rax
     je      cmd_lrange
+    jmp     emit_unknown
+.len7:
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_hgetall]
+    mov     rdx, 7
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_hgetall
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_hexists]
+    mov     rdx, 7
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_hexists
     jmp     emit_unknown
 .done:
     ret
