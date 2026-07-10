@@ -1,6 +1,6 @@
 %include "syscalls.inc"
-global net_serve
-global cur_out, cur_cap, cur_len, cur_err
+global net_serve, mem_map_grow
+global cur_out, cur_cap, cur_len, cur_err, cur_mmap
 extern parse_one, dispatch, emit_protoerr
 
 section .rodata
@@ -21,6 +21,7 @@ cur_out:     resq 1                        ; base ptr of the current conn's outp
 cur_cap:     resq 1                        ; its capacity
 cur_len:     resq 1                        ; bytes built so far
 cur_err:     resq 1                        ; set if a reply overflowed the buffer
+cur_mmap:    resq 1                        ; 1 if cur_out is an owned mmap, else 0 (base slot)
 
 section .text
 ; ============================================================================
@@ -287,6 +288,7 @@ drain:
     mov     [rel cur_cap], rdx           ; cur_cap = out_cap
     mov     qword [rel cur_len], 0
     mov     qword [rel cur_err], 0
+    mov     qword [rel cur_mmap], 0
     mov     rsi, [rax]                   ; rb_used
     mov     rdi, rbx
     shl     rdi, CONN_BUF_SHIFT
@@ -343,6 +345,14 @@ drain:
     mov     [rax+32], rdx
     mov     rdx, [rel cur_cap]
     mov     [rax+40], rdx
+    ; mirror mmap ownership into flags (ST_OUT_MMAP)
+    mov     rdx, [rax+24]                ; flags
+    and     rdx, ~ST_OUT_MMAP
+    cmp     qword [rel cur_mmap], 0
+    je      .mm0
+    or      rdx, ST_OUT_MMAP
+.mm0:
+    mov     [rax+24], rdx
     mov     rdx, [rel cur_len]
     mov     [rax+16], rdx
     mov     qword [rax+8], 0             ; out_pos = 0
@@ -431,15 +441,98 @@ _send:
     pop     rbx
     ret
 
-; _reset_outbuf(edi=fd): reply fully sent — reset the drain cursor/length.
-; (Task 1: base slot only; Task 2 adds munmap of an overflow buffer.)
+; mem_map_grow(rdi = required capacity): grow the current build buffer to hold at
+; least `rdi` bytes. newcap = max(2*cur_cap, need) rounded up to a page; mmap it,
+; copy the existing cur_len bytes, munmap the old buffer if it was an owned mmap,
+; and update cur_out/cur_cap/cur_mmap. On mmap failure, set cur_err and return
+; with cur_out/cur_cap unchanged (caller skips the write). Preserves callee-saved.
+mem_map_grow:
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+    push    r15                          ; 5 pushes -> ==0 at calls
+    mov     r15, rdi                     ; need
+    ; newcap = 2*cur_cap
+    mov     r14, [rel cur_cap]
+    add     r14, r14
+    cmp     r14, r15
+    jae     .have_cap
+    mov     r14, r15                     ; newcap = need if bigger
+.have_cap:
+    ; round up to page (4096)
+    add     r14, 4095
+    and     r14, -4096
+    ; mmap(NULL, newcap, RW, ANON|PRIVATE, -1, 0)
+    mov     rax, SYS_mmap
+    xor     rdi, rdi
+    mov     rsi, r14
+    mov     rdx, PROT_RW
+    mov     r10, MAP_ANON_PRIV
+    mov     r8, -1
+    xor     r9, r9
+    syscall
+    cmp     rax, -4095
+    jae     .fail
+    mov     r13, rax                     ; new buffer
+    ; copy cur_len bytes from cur_out to new
+    mov     rdi, r13
+    mov     rsi, [rel cur_out]
+    mov     rcx, [rel cur_len]
+    rep     movsb
+    ; if old was an owned mmap, munmap(cur_out, cur_cap)
+    cmp     qword [rel cur_mmap], 0
+    je      .swap
+    mov     rax, SYS_munmap
+    mov     rdi, [rel cur_out]
+    mov     rsi, [rel cur_cap]
+    syscall
+.swap:
+    mov     [rel cur_out], r13
+    mov     [rel cur_cap], r14
+    mov     qword [rel cur_mmap], 1
+    jmp     .done
+.fail:
+    mov     qword [rel cur_err], 1       ; leave cur_out/cur_cap unchanged
+.done:
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
+    ret
+
+; _reset_outbuf(edi=fd): reply fully sent — munmap an overflow buffer (if any),
+; reset out_ptr to the base slot, clear ST_OUT_MMAP, zero out_pos/out_len.
+;   rbx = fd, r12 = &state (saved).
 _reset_outbuf:
-    lea     rax, [rel conn_state]
-    mov     ecx, edi
+    push    rbx
+    push    r12
+    sub     rsp, 8                       ; 2 pushes + 8 -> ==0 at calls
+    mov     ebx, edi
+    lea     r12, [rel conn_state]
+    mov     rcx, rbx
     shl     rcx, CONN_STATE_SHIFT
-    add     rax, rcx
-    mov     qword [rax+8], 0             ; out_pos = 0
-    mov     qword [rax+16], 0            ; out_len = 0
+    add     r12, rcx                     ; &state
+    test    qword [r12+24], ST_OUT_MMAP
+    jz      .to_base
+    mov     rax, SYS_munmap
+    mov     rdi, [r12+32]                ; out_ptr (overflow mmap)
+    mov     rsi, [r12+40]                ; out_cap
+    syscall
+    and     qword [r12+24], ~ST_OUT_MMAP
+.to_base:
+    ; out_ptr = base slot ; out_cap = OUTBUF_BASE_SIZE
+    mov     rdx, rbx
+    shl     rdx, OUTBUF_BASE_SHIFT
+    add     rdx, [rel outbuf_base]
+    mov     [r12+32], rdx
+    mov     qword [r12+40], OUTBUF_BASE_SIZE
+    mov     qword [r12+8], 0             ; out_pos = 0
+    mov     qword [r12+16], 0            ; out_len = 0
+    add     rsp, 8
+    pop     r12
+    pop     rbx
     ret
 
 ; on_writable(edi=fd): EPOLLOUT ready — resume the send; on full drain, drain input.
@@ -463,13 +556,25 @@ close_conn:
     add     rax, rcx
     test    qword [rax+24], ST_IN_USE
     jz      .done
+    ; free an overflow output buffer if one is mapped
+    test    qword [rax+24], ST_OUT_MMAP
+    jz      .nounmap
+    mov     r8, rax                      ; save &state across munmap
+    mov     r9d, edi                     ; save fd
+    mov     rax, SYS_munmap
+    mov     rdi, [r8+32]                 ; out_ptr
+    mov     rsi, [r8+40]                 ; out_cap
+    syscall
+    mov     rax, r8
+    mov     edi, r9d
+.nounmap:
     mov     r8, rax
     mov     rax, SYS_close
-    syscall
+    syscall                              ; rdi still = fd
     xor     rcx, rcx
-    mov     [r8], rcx                    ; rb_used
-    mov     [r8+8], rcx                  ; out_pos
-    mov     [r8+16], rcx                 ; out_len
-    mov     [r8+24], rcx                 ; flags
+    mov     [r8], rcx
+    mov     [r8+8], rcx
+    mov     [r8+16], rcx
+    mov     [r8+24], rcx
 .done:
     ret

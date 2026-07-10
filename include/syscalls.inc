@@ -52,11 +52,12 @@
 %define MAX_CONNS          1024
 %define CONN_BUF_SIZE      16384        ; per-conn READ buffer slot
 %define CONN_BUF_SHIFT     14
-%define OUTBUF_BASE_SIZE   65536        ; per-conn output buffer base slot (Task 2 -> 32768)
-%define OUTBUF_BASE_SHIFT  16           ; (Task 2 -> 15)
+%define OUTBUF_BASE_SIZE   32768        ; per-conn output buffer base slot
+%define OUTBUF_BASE_SHIFT  15
 %define CONN_STATE_SZ      64
 %define CONN_STATE_SHIFT   6
 %define MAX_EVENTS         256
 %define EV_SIZE            12
 %define ST_IN_USE          1
 %define ST_WATCH_OUT       2
+%define ST_OUT_MMAP        4
