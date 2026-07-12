@@ -3,6 +3,7 @@ global ks_init, ks_set, ks_del, ks_lookup, ks_insert
 extern mem_alloc, mem_free, memcmp_n, fnv1a
 extern table_alloc, table_free
 extern list_free, hash_free
+extern g_now_ms
 
 ; Hashtable entry layout (48 bytes, ENTRY_SZ):
 ;   [0]=next_ptr  [8]=key_ptr  [16]=key_len  [24]=val_ptr  [32]=val_len  [40]=type
@@ -358,6 +359,7 @@ ks_set:
     mov     r13, rsi                ; klen
     mov     r14, rdx                ; val
     mov     r15, rcx                ; vlen
+    mov     rbx, r8                 ; stash keepttl (rbx survives _rehash_step/_find)
     call    _rehash_step
     mov     rdi, r12
     mov     rsi, r13
@@ -365,6 +367,7 @@ ks_set:
     test    rax, rax
     je      .insert
     ; overwrite: alloc new value first, then free old
+    mov     r12, rbx                ; keepttl -> r12 (key no longer needed on this path)
     mov     rbx, rax                ; entry
     mov     rdi, r14
     mov     rsi, r15
@@ -377,6 +380,9 @@ ks_set:
     mov     [rbx+24], r14
     mov     [rbx+32], r15
     mov     qword [rbx+40], TYPE_STR ; now a string
+    test    r12, r12                ; keepttl?
+    jnz     .ok
+    mov     qword [rbx+48], 0       ; SET semantics: clear TTL on successful overwrite
     jmp     .ok
 .insert:
     call    _maybe_expand           ; may start a rehash before we route
@@ -401,6 +407,7 @@ ks_set:
     mov     [rax+24], r14           ; val_ptr
     mov     [rax+32], r15           ; val_len
     mov     qword [rax+40], TYPE_STR ; type = string
+    mov     qword [rax+48], 0       ; expire_ms = 0 (new key: no TTL)
     mov     rdi, rax                ; entry
     mov     rsi, r12                ; key
     mov     rdx, r13                ; len
@@ -508,7 +515,19 @@ ks_lookup:
     call    _rehash_step
     mov     rdi, r12
     mov     rsi, r13
-    call    _find
+    call    _find                   ; rax = entry | 0 ; r12=key, r13=len
+    test    rax, rax
+    jz      .ret
+    mov     rcx, [rax+48]           ; expire_ms
+    test    rcx, rcx
+    jz      .ret                    ; no TTL
+    cmp     rcx, [rel g_now_ms]
+    ja      .ret                    ; deadline > now -> still live
+    mov     rdi, r12
+    mov     rsi, r13
+    call    ks_del                  ; non-recursive; frees the expired key
+    xor     rax, rax
+.ret:
     add     rsp, 8
     pop     r13
     pop     r12
@@ -545,6 +564,7 @@ ks_insert:
     mov     [r14+24], rcx           ; val_ptr = 0
     mov     [r14+32], rcx           ; val_len = 0
     mov     [r14+40], rcx           ; type = TYPE_STR (0)
+    mov     [r14+48], rcx           ; expire_ms = 0 (no TTL)
     mov     rdi, r14                ; entry
     mov     rsi, r12                ; key
     mov     rdx, r13                ; len

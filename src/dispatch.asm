@@ -290,6 +290,7 @@ cmd_set:
     mov     rsi, [rel argv_lens + 8]    ; key len
     mov     rdx, [rel argv_ptrs + 16]   ; val ptr
     mov     rcx, [rel argv_lens + 16]   ; val len
+    xor     r8, r8                  ; keepttl = 0 (SET clears any TTL)
     call    ks_set                      ; rax=0 ok, 1 oom (arena exhausted)
     test    rax, rax
     jnz     .oom

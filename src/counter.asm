@@ -139,6 +139,7 @@ _incr_by:
     mov     rsi, r15                 ; key len
     lea     rdx, [rsp]               ; value bytes
     mov     rcx, rax                 ; value len
+    mov     r8, 1                    ; keepttl = 1 (INCR/DECR/INCRBY/DECRBY preserve TTL)
     call    ks_set                   ; rax = 0 ok / 1 oom
     test    rax, rax
     jnz     .oom
