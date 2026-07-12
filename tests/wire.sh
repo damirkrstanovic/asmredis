@@ -230,6 +230,27 @@ check SMEMBERS
 check SET setstr v
 check SADD setstr m
 check SCARD setstr
+check SET ko v EX 100
+check TTL ko
+check SET ko w KEEPTTL
+check TTL ko
+check SET ko v2
+check TTL ko
+check DEL kn
+check SET kn v NX
+check SET kn w NX
+check GET kn
+check SET kn z XX
+check DEL km
+check SET km v XX
+check EXISTS km
+check SET ko v EX abc
+check SET ko v EX 0
+check SET ko v EX -1
+check SET ko v EX 100 PX 100
+check SET ko v NX XX
+check SET ko v BADOPT
+check SET ko v EX
 kill $SRV 2>/dev/null
 valkey-cli -p 7778 shutdown nosave 2>/dev/null
 [ "$fail" = "0" ] && echo "PASS conformance" || { echo "FAIL conformance"; exit 1; }
@@ -409,3 +430,15 @@ fi
 kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
 
 [ $st -eq 0 ] || exit 1
+
+# --- Milestone K: SET options conformance ---
+./asmredis 7777 & SRV=$!
+for _i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/7777) 2>/dev/null && { exec 3>&- 3<&-; break; }; sleep 0.1; done
+if timeout 60 python3 tests/setopt.py 7777 >/tmp/asmk_setopt.txt 2>&1; then
+  echo "PASS setopt"; so=0
+else
+  echo "FAIL setopt: $(cat /tmp/asmk_setopt.txt)"; so=1
+fi
+kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
+
+[ $so -eq 0 ] || exit 1

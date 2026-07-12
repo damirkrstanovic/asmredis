@@ -3,6 +3,7 @@ global emit_protoerr, emit_wrongargs
 global emit_wrongtype, emit_notint, emit_oom
 global emit_incrdecr_ovf, emit_decr_ovf
 global emit_invalid_expire
+global emit_syntax
 extern append_raw
 
 section .rodata
@@ -26,6 +27,8 @@ iexp_pre:     db "-ERR invalid expire time in '"
 iexp_pre_len  equ $ - iexp_pre
 iexp_post:    db "' command", 13, 10
 iexp_post_len equ $ - iexp_post
+m_syntax:     db "-ERR syntax error", 13, 10
+m_syntax_len  equ $ - m_syntax
 
 section .text
 ; emit_protoerr: append "-ERR Protocol error\r\n" to the reply buffer.
@@ -103,3 +106,8 @@ emit_invalid_expire:
     pop     r12
     pop     rbx
     ret
+
+emit_syntax:
+    lea     rdi, [rel m_syntax]
+    mov     rsi, m_syntax_len
+    jmp     append_raw
