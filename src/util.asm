@@ -1,6 +1,6 @@
 %include "syscalls.inc"
 global atoi_port
-global itoa_u, memcmp_n, to_upper_buf
+global itoa_u, itoa_s, memcmp_n, to_upper_buf
 global fnv1a
 global parse_int
 
@@ -48,6 +48,23 @@ itoa_u:
     rep     movsb
     ret
 
+; itoa_s(rdi=signed value, rsi=out buf >=21) -> rax=length. Emits '-' for
+; negatives then the unsigned magnitude via itoa_u (INT64_MIN's magnitude is
+; 2^63 via unsigned negation, which itoa_u prints correctly). Calls itoa_u.
+itoa_s:
+    test    rdi, rdi
+    jns     .pos
+    mov     byte [rsi], '-'
+    neg     rdi                  ; magnitude
+    push    rsi                  ; save buf; 1 push -> aligned call
+    lea     rsi, [rsi+1]         ; digits go after the '-'
+    call    itoa_u               ; rax = digit length
+    pop     rsi
+    inc     rax                  ; + '-'
+    ret
+.pos:
+    jmp     itoa_u               ; tail call: rdi=value, rsi=buf
+
 ; memcmp_n: rdi=a, rsi=b, rdx=n -> rax=0 if equal, 1 if differ
 memcmp_n:
     test    rdx, rdx
@@ -87,38 +104,63 @@ to_upper_buf:
     ret
 
 ; parse_int(rdi=ptr, rsi=len) -> rax=value (signed), rdx=1 valid / 0 invalid.
-; Signed base-10, optional leading '-'. Rejects empty, "-", non-digits, and
-; magnitudes past INT64_MAX. Leaf (no calls).
+; string2ll-faithful: base-10, optional leading '-', NO leading zeros (except the
+; single "0"), no '+', no spaces, no "-0"; accepts the full [INT64_MIN, INT64_MAX].
+; Leaf (no calls).
 parse_int:
     test    rsi, rsi
     je      .bad
-    xor     r8, r8              ; negative flag
-    xor     rax, rax            ; accumulator
+    xor     r8, r8                  ; neg = 0
     movzx   rcx, byte [rdi]
-    cmp     rcx, '-'
-    jne     .digits
-    mov     r8, 1
+    cmp     cl, '-'
+    jne     .first
+    mov     r8, 1                   ; negative
     inc     rdi
     dec     rsi
-    je      .bad                ; "-" alone
-.digits:
+    je      .bad                    ; "-" alone
+.first:
     movzx   rcx, byte [rdi]
-    sub     rcx, '0'
-    cmp     rcx, 9              ; unsigned: catches <'0' (wraps huge) and >'9'
+    sub     ecx, '0'
+    cmp     ecx, 9                  ; unsigned: catches <'0' and >'9'
     ja      .bad
-    mov     r9, 922337203685477580  ; (2^63-1)/10; guard imul overflow
+    test    ecx, ecx                ; zero-detect must not reuse ZF from cmp,9
+    jnz     .accum                  ; first digit 1..9 -> normal accumulate
+    ; first digit is '0': only the exact non-negative single "0" is valid
+    test    r8, r8
+    jnz     .bad                    ; "-0..." invalid
+    cmp     rsi, 1
+    jne     .bad                    ; "0" followed by more -> leading zero, invalid
+    xor     rax, rax                ; value = 0
+    mov     rdx, 1
+    ret
+.accum:
+    xor     rax, rax                ; acc = 0 (unsigned magnitude)
+    mov     r9, 1844674407370955161 ; floor((2^64-1)/10), multiply-overflow guard
+.dloop:
+    movzx   rcx, byte [rdi]
+    sub     ecx, '0'
+    cmp     ecx, 9
+    ja      .bad
     cmp     rax, r9
-    ja      .bad
+    ja      .bad                    ; acc*10 would overflow u64
     imul    rax, rax, 10
     add     rax, rcx
-    js      .bad                ; passed INT64_MAX -> invalid
+    jc      .bad                    ; u64 add carry -> overflow
     inc     rdi
     dec     rsi
-    jnz     .digits
+    jnz     .dloop
     test    r8, r8
-    je      .ok
-    neg     rax
-.ok:
+    jnz     .neg
+    mov     r10, 0x7fffffffffffffff ; non-negative: acc <= 2^63-1
+    cmp     rax, r10
+    ja      .bad
+    mov     rdx, 1
+    ret
+.neg:
+    mov     r10, 0x8000000000000000 ; negative: acc <= 2^63 (2^63 -> INT64_MIN)
+    cmp     rax, r10
+    ja      .bad
+    neg     rax                     ; two's complement; acc=2^63 -> 0x8000... = INT64_MIN
     mov     rdx, 1
     ret
 .bad:

@@ -147,6 +147,39 @@ check HSET solo2 f v
 check HDEL solo2 f
 check HLEN solo2
 check GET solo2
+check DEL c1
+check INCR c1
+check INCR c1
+check INCRBY c1 10
+check DECR c1
+check DECRBY c1 4
+check DECRBY c1 -2
+check SET cmax 9223372036854775807
+check INCR cmax
+check SET cbad abc
+check INCR cbad
+check SET clz 011
+check INCR clz
+check INCRBY cbad notanint
+check DECRBY c1 -9223372036854775808
+check SET cmin -9223372036854775807
+check DECR cmin
+check INCR cmin
+check RPUSH clist a
+check INCR clist
+check INCR
+check INCRBY k1
+check DECRBY k1
+check TYPE cmax
+check TYPE clist
+check HSET chash f v
+check TYPE chash
+check TYPE cmissing
+check EXISTS cmax cbad cmissing cmax
+check EXISTS cmissing
+check EXISTS
+check TYPE
+check TYPE a b
 kill $SRV 2>/dev/null
 valkey-cli -p 7778 shutdown nosave 2>/dev/null
 [ "$fail" = "0" ] && echo "PASS conformance" || { echo "FAIL conformance"; exit 1; }
@@ -290,3 +323,15 @@ fi
 kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
 
 [ $sp -eq 0 ] || exit 1
+
+# --- Milestone H: counters + EXISTS/TYPE exact-byte conformance ---
+./asmredis 7777 & SRV=$!
+for _i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/7777) 2>/dev/null && { exec 3>&- 3<&-; break; }; sleep 0.1; done
+if timeout 60 python3 tests/counter.py 7777 >/tmp/asmh_counter.txt 2>&1; then
+  echo "PASS counter"; ct=0
+else
+  echo "FAIL counter: $(cat /tmp/asmh_counter.txt)"; ct=1
+fi
+kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
+
+[ $ct -eq 0 ] || exit 1

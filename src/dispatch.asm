@@ -8,6 +8,7 @@ extern emit_wrongargs, emit_wrongtype, emit_oom
 extern cmd_lpush, cmd_rpush, cmd_lpop, cmd_rpop, cmd_llen, cmd_lrange
 extern cmd_hset, cmd_hget, cmd_hdel, cmd_hgetall, cmd_hlen
 extern cmd_hexists, cmd_hkeys, cmd_hvals
+extern cmd_incr, cmd_decr, cmd_incrby, cmd_decrby
 
 section .rodata
 s_pong:     db "PONG"
@@ -33,6 +34,18 @@ name_hkeys:   db "HKEYS"
 name_hvals:   db "HVALS"
 name_hgetall: db "HGETALL"
 name_hexists: db "HEXISTS"
+name_incr:    db "INCR"
+name_decr:    db "DECR"
+name_incrby:  db "INCRBY"
+name_decrby:  db "DECRBY"
+name_exists:  db "EXISTS"
+name_type:    db "TYPE"
+lc_exists:    db "exists"
+lc_type:      db "type"
+t_string:     db "string"
+t_list:       db "list"
+t_hash:       db "hash"
+t_none:       db "none"
 uk_pre:     db "-ERR unknown command '"
 uk_pre_len  equ $ - uk_pre
 uk_mid:     db "', with args beginning with: "
@@ -132,6 +145,24 @@ dispatch:
     call    memcmp_n
     test    rax, rax
     je      cmd_hlen
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_incr]
+    mov     rdx, 4
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_incr
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_decr]
+    mov     rdx, 4
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_decr
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_type]
+    mov     rdx, 4
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_type
     jmp     emit_unknown
 .len3:
     lea     rdi, [rel cmd_upper]
@@ -186,6 +217,24 @@ dispatch:
     call    memcmp_n
     test    rax, rax
     je      cmd_lrange
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_incrby]
+    mov     rdx, 6
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_incrby
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_decrby]
+    mov     rdx, 6
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_decrby
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_exists]
+    mov     rdx, 6
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_exists
     jmp     emit_unknown
 .len7:
     lea     rdi, [rel cmd_upper]
@@ -310,6 +359,92 @@ cmd_del:
     lea     rdi, [rel lc_del]
     mov     rsi, 3
     sub     rsp, 8                      ; entered at rsp%16==8 -> align call to 0
+    call    emit_wrongargs
+    add     rsp, 8
+    ret
+
+; cmd_exists: EXISTS key [key ...] -> :<count>. Each argument looked up
+; independently; duplicates counted, missing skipped.
+;   rbx = index i, r13 = count.
+cmd_exists:
+    cmp     qword [rel argc], 2
+    jl      .wa
+    push    rbx
+    push    r13
+    sub     rsp, 8                   ; 2 push + 8 -> ==0 at calls
+    mov     rbx, 1                   ; i = 1
+    xor     r13, r13                 ; count = 0
+.loop:
+    cmp     rbx, [rel argc]
+    jae     .fin
+    lea     rax, [rel argv_ptrs]
+    mov     rdi, [rax + rbx*8]
+    lea     rax, [rel argv_lens]
+    mov     rsi, [rax + rbx*8]
+    call    ks_lookup
+    test    rax, rax
+    jz      .next
+    inc     r13
+.next:
+    inc     rbx
+    jmp     .loop
+.fin:
+    mov     rdi, r13
+    call    reply_int
+    add     rsp, 8
+    pop     r13
+    pop     rbx
+    ret
+.wa:
+    lea     rdi, [rel lc_exists]
+    mov     rsi, 6
+    sub     rsp, 8
+    call    emit_wrongargs
+    add     rsp, 8
+    ret
+
+; cmd_type: TYPE key -> +string / +list / +hash / +none. Never WRONGTYPE.
+cmd_type:
+    cmp     qword [rel argc], 2
+    jne     .wa
+    sub     rsp, 8                   ; align calls
+    mov     rdi, [rel argv_ptrs + 8]
+    mov     rsi, [rel argv_lens + 8]
+    call    ks_lookup
+    test    rax, rax
+    jz      .none
+    mov     rax, [rax+40]            ; type
+    cmp     rax, TYPE_STR
+    je      .str
+    cmp     rax, TYPE_LIST
+    je      .list
+    lea     rdi, [rel t_hash]        ; TYPE_HASH
+    mov     rsi, 4
+    call    reply_simple
+    add     rsp, 8
+    ret
+.str:
+    lea     rdi, [rel t_string]
+    mov     rsi, 6
+    call    reply_simple
+    add     rsp, 8
+    ret
+.list:
+    lea     rdi, [rel t_list]
+    mov     rsi, 4
+    call    reply_simple
+    add     rsp, 8
+    ret
+.none:
+    lea     rdi, [rel t_none]
+    mov     rsi, 4
+    call    reply_simple
+    add     rsp, 8
+    ret
+.wa:
+    lea     rdi, [rel lc_type]
+    mov     rsi, 4
+    sub     rsp, 8
     call    emit_wrongargs
     add     rsp, 8
     ret
