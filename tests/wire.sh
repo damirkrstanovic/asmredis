@@ -180,6 +180,35 @@ check EXISTS cmissing
 check EXISTS
 check TYPE
 check TYPE a b
+check SET ek v
+check EXPIRE ek 100
+check TTL ek
+check EXPIRE nokey 100
+check TTL nokey
+check PTTL nokey
+check SET nt2 v
+check TTL nt2
+check PERSIST ek
+check PERSIST ek
+check PERSIST nokey
+check SET dk v
+check EXPIREAT dk 1
+check EXISTS dk
+check TYPE dk
+check GET dk
+check TTL dk
+check SET dk2 v
+check PEXPIREAT dk2 1
+check EXISTS dk2
+check EXPIRE ek abc
+check EXPIRE nokey abc
+check EXPIRE ek 9999999999999999
+check EXPIRE ek -9999999999999999
+check EXPIREAT ek 9999999999999999
+check EXPIRE
+check TTL
+check PERSIST
+check PEXPIREAT ek
 kill $SRV 2>/dev/null
 valkey-cli -p 7778 shutdown nosave 2>/dev/null
 [ "$fail" = "0" ] && echo "PASS conformance" || { echo "FAIL conformance"; exit 1; }
@@ -335,3 +364,15 @@ fi
 kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
 
 [ $ct -eq 0 ] || exit 1
+
+# --- Milestone I: TTL family conformance + real-time expiry ---
+./asmredis 7777 & SRV=$!
+for _i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/7777) 2>/dev/null && { exec 3>&- 3<&-; break; }; sleep 0.1; done
+if timeout 60 python3 tests/expire.py 7777 >/tmp/asmi_expire.txt 2>&1; then
+  echo "PASS expire"; ex=0
+else
+  echo "FAIL expire: $(cat /tmp/asmi_expire.txt)"; ex=1
+fi
+kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
+
+[ $ex -eq 0 ] || exit 1
