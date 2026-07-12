@@ -14,11 +14,11 @@ o_count:  db "COUNT"
 section .bss
 scan_obuf:  resb 8                 ; uppercased option token
 scan_cbuf:  resb 24                ; cursor decimal string
-scan_kptr:  resq 4096              ; collected key ptrs
-scan_klen:  resq 4096              ; collected key lens
 sp_pat:     resq 1                 ; MATCH pattern ptr (0 = none)
 sp_patlen:  resq 1
 sp_count:   resq 1
+sp_table:   resq 1                 ; single-table base (after ks_scan_prep)
+sp_mask:    resq 1                 ; its mask
 
 section .text
 ; _rev64(rdi) -> rax: reverse the 64 bits of rdi. Leaf.
@@ -179,79 +179,29 @@ cmd_scan:
     jmp     .optloop
 .optsdone:
     call    ks_scan_prep            ; rax=table, rdx=mask
-    mov     r12, rax
-    mov     r13, rdx
-    mov     r14, [rel sp_count]     ; buckets to scan
-    xor     r15, r15                ; n = 0
-.scanloop:
-    mov     rax, rbx
-    and     rax, r13
-    mov     rax, [r12 + rax*8]      ; node = bucket head
-.chain:
-    test    rax, rax
-    jz      .nextbucket
-    push    rax                     ; save node
-    cmp     qword [rel sp_pat], 0
-    je      .collect
-    mov     rdi, [rel sp_pat]
-    mov     rsi, [rel sp_patlen]
-    mov     rdx, [rax+8]            ; key ptr
-    mov     rcx, [rax+16]           ; key len
-    call    _glob_match
-    test    rax, rax
-    jz      .skipkey
-.collect:
-    cmp     r15, 4096
-    jae     .skipkey
-    pop     rax
-    push    rax
-    mov     rcx, [rax+8]
-    lea     rdx, [rel scan_kptr]
-    mov     [rdx + r15*8], rcx
-    mov     rcx, [rax+16]
-    lea     rdx, [rel scan_klen]
-    mov     [rdx + r15*8], rcx
-    inc     r15
-.skipkey:
-    pop     rax
-    mov     rax, [rax]              ; node = node->next
-    jmp     .chain
-.nextbucket:
-    mov     rax, r13
-    not     rax
-    or      rbx, rax                ; v |= ~mask
-    mov     rdi, rbx
-    call    _rev64
-    inc     rax
-    mov     rdi, rax
-    call    _rev64
-    mov     rbx, rax                ; v = rev(rev(v)+1)
-    test    rbx, rbx
-    jz      .emit                   ; wrapped to 0 -> complete
-    dec     r14
-    jnz     .scanloop
-.emit:
+    mov     [rel sp_table], rax
+    mov     [rel sp_mask], rdx
+    ; PASS 1: count matched keys + compute the next cursor
+    mov     rdi, rbx                ; start cursor
+    xor     rsi, rsi                ; mode 0 = count
+    call    _scan_run               ; rax=matched, rdx=next cursor
+    mov     r15, rax                ; matched count
+    mov     r12, rdx                ; next cursor
+    ; emit [ cursor_string, [ keys ] ]
     mov     rdi, 2
-    call    reply_array_header      ; [cursor, keys]
-    mov     rdi, rbx
+    call    reply_array_header
+    mov     rdi, r12                ; next cursor
     lea     rsi, [rel scan_cbuf]
     call    itoa_u                  ; rax = len
     lea     rdi, [rel scan_cbuf]
     mov     rsi, rax
     call    reply_bulk
-    mov     rdi, r15
+    mov     rdi, r15                ; matched count -> keys array header
     call    reply_array_header
-    xor     r14, r14                ; i = 0
-.emitkeys:
-    cmp     r14, r15
-    jae     .done
-    lea     rax, [rel scan_kptr]
-    mov     rdi, [rax + r14*8]
-    lea     rax, [rel scan_klen]
-    mov     rsi, [rax + r14*8]
-    call    reply_bulk
-    inc     r14
-    jmp     .emitkeys
+    ; PASS 2: emit the keys (same start cursor -> identical bucket walk)
+    mov     rdi, rbx                ; start cursor
+    mov     rsi, 1                  ; mode 1 = emit
+    call    _scan_run
 .done:
     pop     r15
     pop     r14
@@ -274,4 +224,82 @@ cmd_scan:
     sub     rsp, 8
     call    emit_wrongargs
     add     rsp, 8
+    ret
+
+; _scan_run(rdi=start cursor, rsi=mode 0=count/1=emit) -> rax=matched, rdx=next cursor.
+; Walks sp_count buckets from the cursor (reverse-binary), matching against sp_pat.
+; Mode 0 only counts; mode 1 emits each matched key via reply_bulk. Deterministic:
+; the two passes over the same start cursor visit identical buckets/keys.
+;   rbx=v r12=mode r13=table r14=mask r15=buckets-left rbp=matched
+_scan_run:
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+    push    rbp                     ; 6 pushes (entry ==8) -> ==8
+    sub     rsp, 8                  ; -> ==0 at calls
+    mov     rbx, rdi                ; v
+    mov     r12, rsi                ; mode
+    mov     r13, [rel sp_table]
+    mov     r14, [rel sp_mask]
+    mov     r15, [rel sp_count]     ; buckets left
+    xor     rbp, rbp                ; matched = 0
+.rloop:
+    mov     rax, rbx
+    and     rax, r14
+    mov     rax, [r13 + rax*8]      ; node = bucket head
+.rchain:
+    test    rax, rax
+    jz      .rnext
+    push    rax                     ; save node
+    cmp     qword [rel sp_pat], 0
+    je      .rmatch
+    mov     rdi, [rel sp_pat]
+    mov     rsi, [rel sp_patlen]
+    mov     rdx, [rax+8]            ; key ptr
+    mov     rcx, [rax+16]           ; key len
+    call    _glob_match             ; leaf
+    test    rax, rax
+    jz      .rskip
+.rmatch:
+    inc     rbp                     ; matched++
+    test    r12, r12
+    jz      .rskip                  ; mode 0 -> count only
+    pop     rax                     ; node
+    mov     rcx, [rax]              ; next
+    push    rcx                     ; save next across reply_bulk
+    mov     rdi, [rax+8]
+    mov     rsi, [rax+16]
+    call    reply_bulk
+    pop     rax                     ; rax = next
+    jmp     .rchain
+.rskip:
+    pop     rax                     ; node
+    mov     rax, [rax]              ; node = node->next
+    jmp     .rchain
+.rnext:
+    mov     rax, r14
+    not     rax
+    or      rbx, rax                ; v |= ~mask
+    mov     rdi, rbx
+    call    _rev64
+    inc     rax
+    mov     rdi, rax
+    call    _rev64
+    mov     rbx, rax                ; v = rev(rev(v)+1)
+    test    rbx, rbx
+    jz      .rdone                  ; wrapped to 0 -> complete
+    dec     r15
+    jnz     .rloop
+.rdone:
+    mov     rax, rbp                ; matched count
+    mov     rdx, rbx                ; next cursor
+    add     rsp, 8
+    pop     rbp
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
     ret
