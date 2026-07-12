@@ -1,5 +1,6 @@
 %include "syscalls.inc"
 global ks_init, ks_set, ks_del, ks_lookup, ks_insert, ks_active_expire
+global ks_scan_prep
 extern mem_alloc, mem_free, memcmp_n, fnv1a
 extern table_alloc, table_free
 extern list_free, hash_free
@@ -650,5 +651,23 @@ ks_active_expire:
     pop     r14
     pop     r13
     pop     r12
+    pop     rbx
+    ret
+
+; ks_scan_prep() -> rax=ht_table[0] base, rdx=ht_mask[0]. Force-completes any pending
+; rehash so the dict is a single table, then returns its base + mask.
+ks_scan_prep:
+    push    rbx                     ; 1 push -> rsp%16==0 at call
+.fin:
+    mov     rax, [rel rehashidx]
+    test    rax, rax
+    js      .done                   ; < 0 -> idle/complete
+    call    _rehash_step
+    jmp     .fin
+.done:
+    lea     rax, [rel ht_table]
+    mov     rax, [rax]              ; ht_table[0]
+    lea     rdx, [rel ht_mask]
+    mov     rdx, [rdx]              ; ht_mask[0]
     pop     rbx
     ret
