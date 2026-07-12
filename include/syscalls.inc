@@ -42,6 +42,7 @@
 %define TYPE_STR   0
 %define TYPE_LIST  1
 %define TYPE_HASH  2
+%define TYPE_SET   3
 %define ENTRY_SZ   56          ; entry incl. type + 8-byte expire_ms at [48] (still class 64)
 
 ; ---- milestone C: epoll / non-blocking ----
