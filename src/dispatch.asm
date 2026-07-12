@@ -11,12 +11,11 @@ extern cmd_hexists, cmd_hkeys, cmd_hvals
 extern cmd_incr, cmd_decr, cmd_incrby, cmd_decrby
 extern cmd_expire, cmd_pexpire, cmd_expireat, cmd_pexpireat, cmd_ttl, cmd_pttl, cmd_persist
 extern cmd_sadd, cmd_srem, cmd_sismember, cmd_scard, cmd_smembers
+extern cmd_set
 
 section .rodata
 s_pong:     db "PONG"
 s_pong_len  equ $ - s_pong
-s_ok:       db "OK"
-s_ok_len    equ $ - s_ok
 name_ping:  db "PING"
 name_echo:  db "ECHO"
 name_set:   db "SET"
@@ -68,7 +67,6 @@ uk_mid_len  equ $ - uk_mid
 ap:         db "'"
 ap_sp:      db "' "
 crlf2:      db 13, 10
-lc_set:     db "set"
 lc_get:     db "get"
 lc_del:     db "del"
 lc_echo:    db "echo"
@@ -371,36 +369,6 @@ cmd_echo:
 .wa:
     lea     rdi, [rel lc_echo]
     mov     rsi, 4
-    sub     rsp, 8                      ; entered at rsp%16==8 -> align call to 0
-    call    emit_wrongargs
-    add     rsp, 8
-    ret
-
-; cmd_set: SET key value -> +OK\r\n, or -ERR out of memory\r\n if the arena is full.
-cmd_set:
-    cmp     qword [rel argc], 3
-    jne     .wa
-    sub     rsp, 8                      ; align call sites to rsp%16==0
-    mov     rdi, [rel argv_ptrs + 8]    ; key ptr
-    mov     rsi, [rel argv_lens + 8]    ; key len
-    mov     rdx, [rel argv_ptrs + 16]   ; val ptr
-    mov     rcx, [rel argv_lens + 16]   ; val len
-    xor     r8, r8                  ; keepttl = 0 (SET clears any TTL)
-    call    ks_set                      ; rax=0 ok, 1 oom (arena exhausted)
-    test    rax, rax
-    jnz     .oom
-    lea     rdi, [rel s_ok]
-    mov     rsi, s_ok_len
-    call    reply_simple
-    add     rsp, 8
-    ret
-.oom:
-    call    emit_oom
-    add     rsp, 8
-    ret
-.wa:
-    lea     rdi, [rel lc_set]
-    mov     rsi, 3
     sub     rsp, 8                      ; entered at rsp%16==8 -> align call to 0
     call    emit_wrongargs
     add     rsp, 8
