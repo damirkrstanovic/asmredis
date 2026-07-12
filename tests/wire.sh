@@ -209,6 +209,27 @@ check EXPIRE
 check TTL
 check PERSIST
 check PEXPIREAT ek
+check DEL setk
+check SADD setk a b c
+check SADD setk a d
+check SCARD setk
+check SISMEMBER setk a
+check SISMEMBER setk z
+check SCARD setmiss
+check SISMEMBER setmiss a
+check SREM setk a z
+check SCARD setk
+check SMEMBERS setk
+check SMEMBERS setmiss
+check TYPE setk
+check SADD
+check SREM setk
+check SCARD
+check SISMEMBER setk
+check SMEMBERS
+check SET setstr v
+check SADD setstr m
+check SCARD setstr
 kill $SRV 2>/dev/null
 valkey-cli -p 7778 shutdown nosave 2>/dev/null
 [ "$fail" = "0" ] && echo "PASS conformance" || { echo "FAIL conformance"; exit 1; }
@@ -376,3 +397,15 @@ fi
 kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
 
 [ $ex -eq 0 ] || exit 1
+
+# --- Milestone J: Sets conformance ---
+./asmredis 7777 & SRV=$!
+for _i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/7777) 2>/dev/null && { exec 3>&- 3<&-; break; }; sleep 0.1; done
+if timeout 60 python3 tests/set.py 7777 >/tmp/asmj_set.txt 2>&1; then
+  echo "PASS sets"; st=0
+else
+  echo "FAIL sets: $(cat /tmp/asmj_set.txt)"; st=1
+fi
+kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
+
+[ $st -eq 0 ] || exit 1
