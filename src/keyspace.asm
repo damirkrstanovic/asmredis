@@ -1,5 +1,5 @@
 %include "syscalls.inc"
-global ks_init, ks_set, ks_del, ks_lookup, ks_insert
+global ks_init, ks_set, ks_del, ks_lookup, ks_insert, ks_active_expire
 extern mem_alloc, mem_free, memcmp_n, fnv1a
 extern table_alloc, table_free
 extern list_free, hash_free
@@ -21,6 +21,7 @@ ht_size:   resq 2      ; nbuckets (power of two)
 ht_mask:   resq 2      ; nbuckets - 1
 ht_used:   resq 2      ; live entry count
 rehashidx: resq 1      ; -1 idle; else next ht[0] bucket index to migrate
+g_expire_cursor: resq 1
 
 section .text
 
@@ -578,6 +579,72 @@ ks_insert:
 .oom:
     xor     rax, rax
 .ret:
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
+    ret
+
+; ks_active_expire(): best-effort reaper. Skips while rehashing (transient). Scans
+; EXPIRE_BUCKETS buckets of ht[0] from a persistent cursor, unlinking+freeing entries
+; whose expire_ms has passed. Preserves callee-saved. Uses g_now_ms.
+;   rbx=slot ptr, r12=entry, r13=buckets-left, r14=mask, r15=table base
+ks_active_expire:
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+    push    r15                         ; 5 pushes -> rsp%16==0 at calls
+    mov     rax, [rel rehashidx]
+    test    rax, rax
+    jns     .aret                       ; rehashing (>=0) -> skip this cycle
+    lea     rcx, [rel ht_table]
+    mov     r15, [rcx]                  ; ht_table[0]
+    test    r15, r15
+    jz      .aret                       ; no table
+    lea     rcx, [rel ht_mask]
+    mov     r14, [rcx]                  ; ht_mask[0]
+    mov     r13, EXPIRE_BUCKETS
+.bucket:
+    test    r13, r13
+    jz      .aret
+    mov     rax, [rel g_expire_cursor]
+    mov     rcx, rax
+    and     rcx, r14                    ; b = cursor & mask
+    inc     rax
+    mov     [rel g_expire_cursor], rax
+    lea     rbx, [r15 + rcx*8]          ; slot = &ht_table[0][b]
+.chain:
+    mov     r12, [rbx]                  ; entry = *slot
+    test    r12, r12
+    jz      .nextb
+    mov     rax, [r12+48]               ; expire_ms
+    test    rax, rax
+    jz      .keep
+    cmp     rax, [rel g_now_ms]
+    ja      .keep                       ; deadline > now
+    ; expired: unlink and free the three blocks
+    mov     rax, [r12]                  ; entry->next
+    mov     [rbx], rax                  ; *slot = next
+    mov     rdi, r12
+    call    _free_value
+    mov     rdi, [r12+8]                ; key_ptr
+    mov     rsi, [r12+16]               ; key_len
+    call    mem_free
+    mov     rdi, r12
+    mov     rsi, ENTRY_SZ
+    call    mem_free
+    lea     rcx, [rel ht_used]
+    dec     qword [rcx]                 ; ht_used[0]--
+    jmp     .chain                      ; re-read *slot (now = old next)
+.keep:
+    mov     rbx, r12                    ; slot = &entry->next (next at offset 0)
+    jmp     .chain
+.nextb:
+    dec     r13
+    jmp     .bucket
+.aret:
     pop     r15
     pop     r14
     pop     r13

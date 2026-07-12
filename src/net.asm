@@ -3,6 +3,7 @@ global net_serve, mem_map_grow
 global cur_out, cur_cap, cur_len, cur_err, cur_mmap
 extern parse_one, dispatch, emit_protoerr
 extern time_refresh
+extern ks_active_expire
 
 section .rodata
 err_setup:     db "setup failed", 10
@@ -107,10 +108,11 @@ net_serve:
     mov     rdi, r12
     lea     rsi, [rel events]
     mov     rdx, MAX_EVENTS
-    mov     r10, -1
+    mov     r10, EXPIRE_TICK_MS
     syscall
-    mov     r15, rax                     ; n (may be <0 on EINTR)
+    mov     r15, rax                     ; n (0 on tick timeout, <0 on EINTR)
     call    time_refresh                 ; refresh g_now_ms before processing
+    call    ks_active_expire
     test    r15, r15
     jle     .wait
     xor     r14, r14                     ; i = 0
