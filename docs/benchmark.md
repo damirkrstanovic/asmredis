@@ -857,3 +857,42 @@ the `SET`/`GET` path executes exactly the same instructions as in milestone G (t
 changed routines are never called on it). The in-session oracle comparison, the
 load-invariant measure, shows asmredis holding its established position (ahead at
 `-c 1`, level across the mid/high range) with no throughput regression.
+
+## Milestone I (key expiration)
+
+Milestone I adds the TTL family (`EXPIRE`/`PEXPIRE`/`EXPIREAT`/`PEXPIREAT`/`TTL`/
+`PTTL`/`PERSIST`), passive expiration, and a best-effort active reaper. The one
+hot-path change is in `ks_lookup` (which `GET` uses): two extra instructions — load
+`[entry+48]` (the deadline) and compare it against the cached `g_now_ms` — **no
+syscall** (the clock is refreshed once per epoll wakeup, not per lookup). The epoll
+loop also gains one cached-clock refresh + a bounded reaper (≤20 buckets) per 100 ms
+tick. So a tiny GET effect is possible; SET is unchanged. Expect within-noise.
+
+**Methodology note (constrained run).** Same as milestone H: this session's sandbox
+kills sustained multi-server benchmark load, so the table is a **single-run
+throughput spot-check** (`valkey-benchmark -t set,get -n 50000`, `throughput summary`
+line, run from a script file) across `-c {1,50,200,500}` × `-d {3,512}`, asmredis:7777
+vs Valkey:7778 in-session. Directional, not authoritative. `uname -r` =
+`7.1.3-2-cachyos`; binary = 49,456 bytes; loadavg ≈ 1.8–2.7.
+
+### throughput, requests/sec (single run, in-session oracle)
+
+| conc | op | asmredis (-d 3) | valkey (-d 3) | asmredis (-d 512) | valkey (-d 512) |
+|---|---|---|---|---|---|
+| 1 | SET | 45,537 | 38,285 | 46,041 | 38,551 |
+| 1 | GET | 46,555 | 40,453 | 44,248 | 39,746 |
+| 50 | SET | 99,602 | 107,991 | 99,010 | 108,460 |
+| 50 | GET | 103,093 | 107,991 | 98,619 | 105,485 |
+| 200 | SET | 98,232 | 102,249 | 103,093 | 100,806 |
+| 200 | GET | 107,527 | 98,425 | 104,384 | 96,525 |
+| 500 | SET | 92,937 | 75,988 | 98,425 | 95,057 |
+| 500 | GET | 90,580 | 100,402 | 98,425 | 89,286 |
+
+**Reading the numbers.** The asmredis-vs-oracle shape is the same as every prior
+milestone: **`-c 1` asmredis ~15–20% faster** (GET `-d 3` 46.6K vs 40.5K; `-d 512`
+44.2K vs 39.7K), **`-c 50–500` a mixed ±few-% tie** (Valkey a touch ahead at `-c 50`,
+asmredis ahead on several `-c 200`/`-c 500` cells, e.g. `-d 3` `-c 200` GET 107.5K vs
+98.4K). **The passive-expiry compare on `GET` is invisible** — GET tracks its
+milestone-H position (`-c 1` GET 46.6K here vs 48.1K in H, within session-load noise;
+Valkey moves with it), consistent with adding two register-only instructions off the
+syscall path. No regression.
