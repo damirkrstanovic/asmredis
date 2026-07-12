@@ -5,6 +5,7 @@ extern net_serve
 extern atoi_port
 extern arena_init
 extern ks_init
+extern time_refresh
 
 section .rodata
 banner:      db "asmredis", 10
@@ -64,6 +65,7 @@ _start:
     syscall
     call    arena_init           ; mmap the value arena
     call    ks_init              ; mmap the initial hashtable
+    call    time_refresh         ; seed g_now_ms before net_serve
     add     rsp, 8
     pop     rdi
     call    net_serve            ; never returns

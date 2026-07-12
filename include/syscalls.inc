@@ -11,6 +11,10 @@
 %define SYS_setsockopt  54
 %define SYS_exit        60
 %define SYS_rt_sigaction 13
+%define SYS_clock_gettime  228
+%define CLOCK_REALTIME     0
+%define EXPIRE_TICK_MS     100
+%define EXPIRE_BUCKETS     20
 
 ; ---- signals ----
 %define SIGPIPE         13           ; write to a broken pipe/socket
@@ -38,7 +42,7 @@
 %define TYPE_STR   0
 %define TYPE_LIST  1
 %define TYPE_HASH  2
-%define ENTRY_SZ   48          ; entry incl. type field (still class 64)
+%define ENTRY_SZ   56          ; entry incl. type + 8-byte expire_ms at [48] (still class 64)
 
 ; ---- milestone C: epoll / non-blocking ----
 %define SYS_epoll_create1  291

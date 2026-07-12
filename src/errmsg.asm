@@ -2,6 +2,7 @@
 global emit_protoerr, emit_wrongargs
 global emit_wrongtype, emit_notint, emit_oom
 global emit_incrdecr_ovf, emit_decr_ovf
+global emit_invalid_expire
 extern append_raw
 
 section .rodata
@@ -21,6 +22,10 @@ m_dovf:          db "-ERR decrement would overflow", 13, 10
 m_dovf_len       equ $ - m_dovf
 m_oom2:          db "-ERR out of memory", 13, 10
 m_oom2_len       equ $ - m_oom2
+iexp_pre:     db "-ERR invalid expire time in '"
+iexp_pre_len  equ $ - iexp_pre
+iexp_post:    db "' command", 13, 10
+iexp_post_len equ $ - iexp_post
 
 section .text
 ; emit_protoerr: append "-ERR Protocol error\r\n" to the reply buffer.
@@ -77,3 +82,24 @@ emit_oom:
     lea     rdi, [rel m_oom2]
     mov     rsi, m_oom2_len
     jmp     append_raw
+
+; emit_invalid_expire(rdi=lowercase name ptr, rsi=name len)
+emit_invalid_expire:
+    push    rbx
+    push    r12
+    sub     rsp, 8
+    mov     rbx, rdi
+    mov     r12, rsi
+    lea     rdi, [rel iexp_pre]
+    mov     rsi, iexp_pre_len
+    call    append_raw
+    mov     rdi, rbx
+    mov     rsi, r12
+    call    append_raw
+    lea     rdi, [rel iexp_post]
+    mov     rsi, iexp_post_len
+    call    append_raw
+    add     rsp, 8
+    pop     r12
+    pop     rbx
+    ret

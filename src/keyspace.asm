@@ -1,11 +1,13 @@
 %include "syscalls.inc"
-global ks_init, ks_set, ks_del, ks_lookup, ks_insert
+global ks_init, ks_set, ks_del, ks_lookup, ks_insert, ks_active_expire
 extern mem_alloc, mem_free, memcmp_n, fnv1a
 extern table_alloc, table_free
 extern list_free, hash_free
+extern g_now_ms
 
-; Hashtable entry layout (48 bytes, ENTRY_SZ):
+; Hashtable entry layout (56 bytes, ENTRY_SZ; allocated in the 64-byte class):
 ;   [0]=next_ptr  [8]=key_ptr  [16]=key_len  [24]=val_ptr  [32]=val_len  [40]=type
+;   [48]=expire_ms (absolute CLOCK_REALTIME ms deadline; 0 = no TTL)
 ;   type: TYPE_STR(0)=val_ptr/val_len are a string; TYPE_LIST(1)=val_ptr is a list header;
 ;         TYPE_HASH(2)=val_ptr is a hash header
 ;
@@ -20,6 +22,7 @@ ht_size:   resq 2      ; nbuckets (power of two)
 ht_mask:   resq 2      ; nbuckets - 1
 ht_used:   resq 2      ; live entry count
 rehashidx: resq 1      ; -1 idle; else next ht[0] bucket index to migrate
+g_expire_cursor: resq 1
 
 section .text
 
@@ -358,6 +361,7 @@ ks_set:
     mov     r13, rsi                ; klen
     mov     r14, rdx                ; val
     mov     r15, rcx                ; vlen
+    mov     rbx, r8                 ; stash keepttl (rbx survives _rehash_step/_find)
     call    _rehash_step
     mov     rdi, r12
     mov     rsi, r13
@@ -365,6 +369,7 @@ ks_set:
     test    rax, rax
     je      .insert
     ; overwrite: alloc new value first, then free old
+    mov     r12, rbx                ; keepttl -> r12 (key no longer needed on this path)
     mov     rbx, rax                ; entry
     mov     rdi, r14
     mov     rsi, r15
@@ -377,6 +382,9 @@ ks_set:
     mov     [rbx+24], r14
     mov     [rbx+32], r15
     mov     qword [rbx+40], TYPE_STR ; now a string
+    test    r12, r12                ; keepttl?
+    jnz     .ok
+    mov     qword [rbx+48], 0       ; SET semantics: clear TTL on successful overwrite
     jmp     .ok
 .insert:
     call    _maybe_expand           ; may start a rehash before we route
@@ -401,6 +409,7 @@ ks_set:
     mov     [rax+24], r14           ; val_ptr
     mov     [rax+32], r15           ; val_len
     mov     qword [rax+40], TYPE_STR ; type = string
+    mov     qword [rax+48], 0       ; expire_ms = 0 (new key: no TTL)
     mov     rdi, rax                ; entry
     mov     rsi, r12                ; key
     mov     rdx, r13                ; len
@@ -508,7 +517,19 @@ ks_lookup:
     call    _rehash_step
     mov     rdi, r12
     mov     rsi, r13
-    call    _find
+    call    _find                   ; rax = entry | 0 ; r12=key, r13=len
+    test    rax, rax
+    jz      .ret
+    mov     rcx, [rax+48]           ; expire_ms
+    test    rcx, rcx
+    jz      .ret                    ; no TTL
+    cmp     rcx, [rel g_now_ms]
+    ja      .ret                    ; deadline > now -> still live
+    mov     rdi, r12
+    mov     rsi, r13
+    call    ks_del                  ; non-recursive; frees the expired key
+    xor     rax, rax
+.ret:
     add     rsp, 8
     pop     r13
     pop     r12
@@ -545,6 +566,7 @@ ks_insert:
     mov     [r14+24], rcx           ; val_ptr = 0
     mov     [r14+32], rcx           ; val_len = 0
     mov     [r14+40], rcx           ; type = TYPE_STR (0)
+    mov     [r14+48], rcx           ; expire_ms = 0 (no TTL)
     mov     rdi, r14                ; entry
     mov     rsi, r12                ; key
     mov     rdx, r13                ; len
@@ -558,6 +580,72 @@ ks_insert:
 .oom:
     xor     rax, rax
 .ret:
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
+    ret
+
+; ks_active_expire(): best-effort reaper. Skips while rehashing (transient). Scans
+; EXPIRE_BUCKETS buckets of ht[0] from a persistent cursor, unlinking+freeing entries
+; whose expire_ms has passed. Preserves callee-saved. Uses g_now_ms.
+;   rbx=slot ptr, r12=entry, r13=buckets-left, r14=mask, r15=table base
+ks_active_expire:
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+    push    r15                         ; 5 pushes -> rsp%16==0 at calls
+    mov     rax, [rel rehashidx]
+    test    rax, rax
+    jns     .aret                       ; rehashing (>=0) -> skip this cycle
+    lea     rcx, [rel ht_table]
+    mov     r15, [rcx]                  ; ht_table[0]
+    test    r15, r15
+    jz      .aret                       ; no table
+    lea     rcx, [rel ht_mask]
+    mov     r14, [rcx]                  ; ht_mask[0]
+    mov     r13, EXPIRE_BUCKETS
+.bucket:
+    test    r13, r13
+    jz      .aret
+    mov     rax, [rel g_expire_cursor]
+    mov     rcx, rax
+    and     rcx, r14                    ; b = cursor & mask
+    inc     rax
+    mov     [rel g_expire_cursor], rax
+    lea     rbx, [r15 + rcx*8]          ; slot = &ht_table[0][b]
+.chain:
+    mov     r12, [rbx]                  ; entry = *slot
+    test    r12, r12
+    jz      .nextb
+    mov     rax, [r12+48]               ; expire_ms
+    test    rax, rax
+    jz      .keep
+    cmp     rax, [rel g_now_ms]
+    ja      .keep                       ; deadline > now
+    ; expired: unlink and free the three blocks
+    mov     rax, [r12]                  ; entry->next
+    mov     [rbx], rax                  ; *slot = next
+    mov     rdi, r12
+    call    _free_value
+    mov     rdi, [r12+8]                ; key_ptr
+    mov     rsi, [r12+16]               ; key_len
+    call    mem_free
+    mov     rdi, r12
+    mov     rsi, ENTRY_SZ
+    call    mem_free
+    lea     rcx, [rel ht_used]
+    dec     qword [rcx]                 ; ht_used[0]--
+    jmp     .chain                      ; re-read *slot (now = old next)
+.keep:
+    mov     rbx, r12                    ; slot = &entry->next (next at offset 0)
+    jmp     .chain
+.nextb:
+    dec     r13
+    jmp     .bucket
+.aret:
     pop     r15
     pop     r14
     pop     r13
