@@ -9,6 +9,7 @@ extern cmd_lpush, cmd_rpush, cmd_lpop, cmd_rpop, cmd_llen, cmd_lrange
 extern cmd_hset, cmd_hget, cmd_hdel, cmd_hgetall, cmd_hlen
 extern cmd_hexists, cmd_hkeys, cmd_hvals
 extern cmd_incr, cmd_decr, cmd_incrby, cmd_decrby
+extern cmd_expire, cmd_pexpire, cmd_expireat, cmd_pexpireat, cmd_ttl, cmd_pttl, cmd_persist
 
 section .rodata
 s_pong:     db "PONG"
@@ -40,6 +41,13 @@ name_incrby:  db "INCRBY"
 name_decrby:  db "DECRBY"
 name_exists:  db "EXISTS"
 name_type:    db "TYPE"
+name_ttl:       db "TTL"
+name_pttl:      db "PTTL"
+name_expire:    db "EXPIRE"
+name_pexpire:   db "PEXPIRE"
+name_persist:   db "PERSIST"
+name_expireat:  db "EXPIREAT"
+name_pexpireat: db "PEXPIREAT"
 lc_exists:    db "exists"
 lc_type:      db "type"
 t_string:     db "string"
@@ -89,6 +97,10 @@ dispatch:
     je      .len6
     cmp     rax, 7
     je      .len7
+    cmp     rax, 8
+    je      .len8
+    cmp     rax, 9
+    je      .len9
     jmp     emit_unknown
 .len4:
     lea     rdi, [rel cmd_upper]
@@ -163,6 +175,12 @@ dispatch:
     call    memcmp_n
     test    rax, rax
     je      cmd_type
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_pttl]
+    mov     rdx, 4
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_pttl
     jmp     emit_unknown
 .len3:
     lea     rdi, [rel cmd_upper]
@@ -183,6 +201,12 @@ dispatch:
     call    memcmp_n
     test    rax, rax
     je      cmd_del
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_ttl]
+    mov     rdx, 3
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_ttl
     jmp     emit_unknown
 .len5:
     lea     rdi, [rel cmd_upper]
@@ -235,6 +259,12 @@ dispatch:
     call    memcmp_n
     test    rax, rax
     je      cmd_exists
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_expire]
+    mov     rdx, 6
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_expire
     jmp     emit_unknown
 .len7:
     lea     rdi, [rel cmd_upper]
@@ -249,6 +279,34 @@ dispatch:
     call    memcmp_n
     test    rax, rax
     je      cmd_hexists
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_pexpire]
+    mov     rdx, 7
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_pexpire
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_persist]
+    mov     rdx, 7
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_persist
+    jmp     emit_unknown
+.len8:
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_expireat]
+    mov     rdx, 8
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_expireat
+    jmp     emit_unknown
+.len9:
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_pexpireat]
+    mov     rdx, 9
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_pexpireat
     jmp     emit_unknown
 .done:
     ret
