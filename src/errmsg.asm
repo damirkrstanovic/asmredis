@@ -1,6 +1,7 @@
 %include "syscalls.inc"
 global emit_protoerr, emit_wrongargs
 global emit_wrongtype, emit_notint, emit_oom
+global emit_incrdecr_ovf, emit_decr_ovf
 extern append_raw
 
 section .rodata
@@ -14,6 +15,10 @@ m_wrongtype:     db "-WRONGTYPE Operation against a key holding the wrong kind o
 m_wrongtype_len  equ $ - m_wrongtype
 m_notint:        db "-ERR value is not an integer or out of range", 13, 10
 m_notint_len     equ $ - m_notint
+m_iovf:          db "-ERR increment or decrement would overflow", 13, 10
+m_iovf_len       equ $ - m_iovf
+m_dovf:          db "-ERR decrement would overflow", 13, 10
+m_dovf_len       equ $ - m_dovf
 m_oom2:          db "-ERR out of memory", 13, 10
 m_oom2_len       equ $ - m_oom2
 
@@ -56,6 +61,16 @@ emit_wrongtype:
 emit_notint:
     lea     rdi, [rel m_notint]
     mov     rsi, m_notint_len
+    jmp     append_raw
+
+emit_incrdecr_ovf:
+    lea     rdi, [rel m_iovf]
+    mov     rsi, m_iovf_len
+    jmp     append_raw
+
+emit_decr_ovf:
+    lea     rdi, [rel m_dovf]
+    mov     rsi, m_dovf_len
     jmp     append_raw
 
 emit_oom:

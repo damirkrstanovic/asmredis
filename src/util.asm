@@ -123,7 +123,8 @@ parse_int:
     sub     ecx, '0'
     cmp     ecx, 9                  ; unsigned: catches <'0' and >'9'
     ja      .bad
-    jne     .accum                  ; first digit 1..9 -> normal accumulate
+    test    ecx, ecx                ; zero-detect must not reuse ZF from cmp,9
+    jnz     .accum                  ; first digit 1..9 -> normal accumulate
     ; first digit is '0': only the exact non-negative single "0" is valid
     test    r8, r8
     jnz     .bad                    ; "-0..." invalid

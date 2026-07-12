@@ -8,6 +8,7 @@ extern emit_wrongargs, emit_wrongtype, emit_oom
 extern cmd_lpush, cmd_rpush, cmd_lpop, cmd_rpop, cmd_llen, cmd_lrange
 extern cmd_hset, cmd_hget, cmd_hdel, cmd_hgetall, cmd_hlen
 extern cmd_hexists, cmd_hkeys, cmd_hvals
+extern cmd_incr, cmd_decr, cmd_incrby, cmd_decrby
 
 section .rodata
 s_pong:     db "PONG"
@@ -33,6 +34,10 @@ name_hkeys:   db "HKEYS"
 name_hvals:   db "HVALS"
 name_hgetall: db "HGETALL"
 name_hexists: db "HEXISTS"
+name_incr:    db "INCR"
+name_decr:    db "DECR"
+name_incrby:  db "INCRBY"
+name_decrby:  db "DECRBY"
 uk_pre:     db "-ERR unknown command '"
 uk_pre_len  equ $ - uk_pre
 uk_mid:     db "', with args beginning with: "
@@ -132,6 +137,18 @@ dispatch:
     call    memcmp_n
     test    rax, rax
     je      cmd_hlen
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_incr]
+    mov     rdx, 4
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_incr
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_decr]
+    mov     rdx, 4
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_decr
     jmp     emit_unknown
 .len3:
     lea     rdi, [rel cmd_upper]
@@ -186,6 +203,18 @@ dispatch:
     call    memcmp_n
     test    rax, rax
     je      cmd_lrange
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_incrby]
+    mov     rdx, 6
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_incrby
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_decrby]
+    mov     rdx, 6
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_decrby
     jmp     emit_unknown
 .len7:
     lea     rdi, [rel cmd_upper]
