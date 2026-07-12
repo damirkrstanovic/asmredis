@@ -5,8 +5,9 @@ extern table_alloc, table_free
 extern list_free, hash_free
 extern g_now_ms
 
-; Hashtable entry layout (48 bytes, ENTRY_SZ):
+; Hashtable entry layout (56 bytes, ENTRY_SZ; allocated in the 64-byte class):
 ;   [0]=next_ptr  [8]=key_ptr  [16]=key_len  [24]=val_ptr  [32]=val_len  [40]=type
+;   [48]=expire_ms (absolute CLOCK_REALTIME ms deadline; 0 = no TTL)
 ;   type: TYPE_STR(0)=val_ptr/val_len are a string; TYPE_LIST(1)=val_ptr is a list header;
 ;         TYPE_HASH(2)=val_ptr is a hash header
 ;
