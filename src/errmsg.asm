@@ -4,6 +4,7 @@ global emit_wrongtype, emit_notint, emit_oom
 global emit_incrdecr_ovf, emit_decr_ovf
 global emit_invalid_expire
 global emit_syntax
+global emit_invalidcursor
 extern append_raw
 
 section .rodata
@@ -29,6 +30,8 @@ iexp_post:    db "' command", 13, 10
 iexp_post_len equ $ - iexp_post
 m_syntax:     db "-ERR syntax error", 13, 10
 m_syntax_len  equ $ - m_syntax
+m_invcur:     db "-ERR invalid cursor", 13, 10
+m_invcur_len  equ $ - m_invcur
 
 section .text
 ; emit_protoerr: append "-ERR Protocol error\r\n" to the reply buffer.
@@ -110,4 +113,9 @@ emit_invalid_expire:
 emit_syntax:
     lea     rdi, [rel m_syntax]
     mov     rsi, m_syntax_len
+    jmp     append_raw
+
+emit_invalidcursor:
+    lea     rdi, [rel m_invcur]
+    mov     rsi, m_invcur_len
     jmp     append_raw

@@ -278,6 +278,12 @@ check SETNX
 check STRLEN
 check MGET
 check MSET
+check SCAN notanumber
+check SCAN 0 COUNT abc
+check SCAN 0 COUNT 0
+check SCAN 0 BADOPT
+check SCAN 0 COUNT
+check SCAN
 kill $SRV 2>/dev/null
 valkey-cli -p 7778 shutdown nosave 2>/dev/null
 [ "$fail" = "0" ] && echo "PASS conformance" || { echo "FAIL conformance"; exit 1; }
@@ -481,3 +487,15 @@ fi
 kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
 
 [ $sp -eq 0 ] || exit 1
+
+# --- Milestone M: SCAN coverage + MATCH + errors ---
+./asmredis 7777 & SRV=$!
+for _i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/7777) 2>/dev/null && { exec 3>&- 3<&-; break; }; sleep 0.1; done
+if timeout 60 python3 tests/scan.py 7777 >/tmp/asmm_scan.txt 2>&1; then
+  echo "PASS scan"; sc=0
+else
+  echo "FAIL scan: $(cat /tmp/asmm_scan.txt)"; sc=1
+fi
+kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
+
+[ $sc -eq 0 ] || exit 1

@@ -13,6 +13,7 @@ extern cmd_expire, cmd_pexpire, cmd_expireat, cmd_pexpireat, cmd_ttl, cmd_pttl, 
 extern cmd_sadd, cmd_srem, cmd_sismember, cmd_scard, cmd_smembers
 extern cmd_set
 extern cmd_setnx, cmd_getset, cmd_append, cmd_strlen, cmd_mset, cmd_mget
+extern cmd_scan
 
 section .rodata
 s_pong:     db "PONG"
@@ -60,6 +61,7 @@ name_setnx:  db "SETNX"
 name_getset: db "GETSET"
 name_append: db "APPEND"
 name_strlen: db "STRLEN"
+name_scan:   db "SCAN"
 lc_exists:    db "exists"
 lc_type:      db "type"
 t_string:     db "string"
@@ -217,6 +219,12 @@ dispatch:
     call    memcmp_n
     test    rax, rax
     je      cmd_mget
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_scan]
+    mov     rdx, 4
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_scan
     jmp     emit_unknown
 .len3:
     lea     rdi, [rel cmd_upper]
