@@ -12,6 +12,7 @@ extern cmd_incr, cmd_decr, cmd_incrby, cmd_decrby
 extern cmd_expire, cmd_pexpire, cmd_expireat, cmd_pexpireat, cmd_ttl, cmd_pttl, cmd_persist
 extern cmd_sadd, cmd_srem, cmd_sismember, cmd_scard, cmd_smembers
 extern cmd_set
+extern cmd_setnx, cmd_getset, cmd_append, cmd_strlen, cmd_mset, cmd_mget
 
 section .rodata
 s_pong:     db "PONG"
@@ -53,6 +54,12 @@ name_srem:      db "SREM"
 name_scard:     db "SCARD"
 name_smembers:  db "SMEMBERS"
 name_sismember: db "SISMEMBER"
+name_mset:   db "MSET"
+name_mget:   db "MGET"
+name_setnx:  db "SETNX"
+name_getset: db "GETSET"
+name_append: db "APPEND"
+name_strlen: db "STRLEN"
 lc_exists:    db "exists"
 lc_type:      db "type"
 t_string:     db "string"
@@ -198,6 +205,18 @@ dispatch:
     call    memcmp_n
     test    rax, rax
     je      cmd_srem
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_mset]
+    mov     rdx, 4
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_mset
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_mget]
+    mov     rdx, 4
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_mget
     jmp     emit_unknown
 .len3:
     lea     rdi, [rel cmd_upper]
@@ -256,6 +275,12 @@ dispatch:
     call    memcmp_n
     test    rax, rax
     je      cmd_scard
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_setnx]
+    mov     rdx, 5
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_setnx
     jmp     emit_unknown
 .len6:
     lea     rdi, [rel cmd_upper]
@@ -288,6 +313,24 @@ dispatch:
     call    memcmp_n
     test    rax, rax
     je      cmd_expire
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_getset]
+    mov     rdx, 6
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_getset
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_append]
+    mov     rdx, 6
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_append
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_strlen]
+    mov     rdx, 6
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_strlen
     jmp     emit_unknown
 .len7:
     lea     rdi, [rel cmd_upper]
