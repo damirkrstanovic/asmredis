@@ -1,16 +1,26 @@
 %include "syscalls.inc"
 global cmd_set
+global cmd_setnx, cmd_getset, cmd_append, cmd_strlen, cmd_mset, cmd_mget
 extern argc, argv_ptrs, argv_lens
 extern ks_set, ks_lookup
 extern parse_int, reply_simple, reply_null
 extern to_upper_buf, memcmp_n
 extern emit_oom, emit_wrongargs, emit_notint, emit_invalid_expire, emit_syntax
 extern g_now_ms
+extern mem_alloc, mem_free
+extern reply_bulk, reply_int, reply_array_header
+extern emit_wrongtype
 
 section .rodata
 s_ok:      db "OK"
 s_ok_len   equ $ - s_ok
 lc_set:    db "set"
+lc_setnx:  db "setnx"
+lc_getset: db "getset"
+lc_append: db "append"
+lc_strlen: db "strlen"
+lc_mset:   db "mset"
+lc_mget:   db "mget"
 o_ex:      db "EX"
 o_px:      db "PX"
 o_exat:    db "EXAT"
@@ -283,4 +293,268 @@ cmd_set:
     pop     r13
     pop     r12
     pop     rbx
+    ret
+
+; ---- SETNX key value -> :1 set / :0 exists ----
+cmd_setnx:
+    cmp     qword [rel argc], 3
+    jne     .wa
+    sub     rsp, 8
+    mov     rdi, [rel argv_ptrs + 8]
+    mov     rsi, [rel argv_lens + 8]
+    call    ks_lookup
+    test    rax, rax
+    jnz     .exists
+    mov     rdi, [rel argv_ptrs + 8]
+    mov     rsi, [rel argv_lens + 8]
+    mov     rdx, [rel argv_ptrs + 16]
+    mov     rcx, [rel argv_lens + 16]
+    xor     r8, r8
+    call    ks_set
+    test    rax, rax
+    jnz     .oom
+    mov     rdi, 1
+    call    reply_int
+    add     rsp, 8
+    ret
+.exists:
+    xor     edi, edi
+    call    reply_int
+    add     rsp, 8
+    ret
+.oom:
+    call    emit_oom
+    add     rsp, 8
+    ret
+.wa:
+    lea     rdi, [rel lc_setnx]
+    mov     rsi, 5
+    sub     rsp, 8
+    call    emit_wrongargs
+    add     rsp, 8
+    ret
+
+; ---- GETSET key value -> old value | nil ----
+cmd_getset:
+    cmp     qword [rel argc], 3
+    jne     .wa
+    sub     rsp, 8
+    mov     rdi, [rel argv_ptrs + 8]
+    mov     rsi, [rel argv_lens + 8]
+    call    ks_lookup
+    test    rax, rax
+    jz      .oldnil
+    cmp     qword [rax+40], TYPE_STR
+    jne     .wrongtype
+    mov     rdi, [rax+24]           ; old val (copied into output before ks_set frees it)
+    mov     rsi, [rax+32]
+    call    reply_bulk
+    jmp     .store
+.oldnil:
+    call    reply_null
+.store:
+    mov     rdi, [rel argv_ptrs + 8]
+    mov     rsi, [rel argv_lens + 8]
+    mov     rdx, [rel argv_ptrs + 16]
+    mov     rcx, [rel argv_lens + 16]
+    xor     r8, r8
+    call    ks_set                  ; keepttl=0; OOM keeps old value (reply already old)
+    add     rsp, 8
+    ret
+.wrongtype:
+    call    emit_wrongtype
+    add     rsp, 8
+    ret
+.wa:
+    lea     rdi, [rel lc_getset]
+    mov     rsi, 6
+    sub     rsp, 8
+    call    emit_wrongargs
+    add     rsp, 8
+    ret
+
+; ---- APPEND key value -> :new_length ----  rbx=entry r12=newbuf r13=newlen
+cmd_append:
+    cmp     qword [rel argc], 3
+    jne     .wa
+    push    rbx
+    push    r12
+    push    r13                     ; 3 pushes -> rsp%16==0
+    mov     rdi, [rel argv_ptrs + 8]
+    mov     rsi, [rel argv_lens + 8]
+    call    ks_lookup
+    test    rax, rax
+    jz      .create
+    cmp     qword [rax+40], TYPE_STR
+    jne     .wrongtype
+    mov     rbx, rax                ; entry
+    mov     r13, [rbx+32]           ; oldlen
+    add     r13, [rel argv_lens + 16] ; + vallen = newlen
+    mov     rdi, r13
+    call    mem_alloc
+    test    rax, rax
+    jz      .oom
+    mov     r12, rax                ; newbuf
+    mov     rdi, r12                ; copy old bytes
+    mov     rsi, [rbx+24]
+    mov     rcx, [rbx+32]
+    rep     movsb                   ; rdi now at newbuf+oldlen
+    mov     rsi, [rel argv_ptrs + 16] ; copy appended bytes
+    mov     rcx, [rel argv_lens + 16]
+    rep     movsb
+    mov     rdi, [rbx+24]           ; free old value
+    mov     rsi, [rbx+32]
+    call    mem_free
+    mov     [rbx+24], r12           ; val_ptr = newbuf
+    mov     [rbx+32], r13           ; val_len = newlen  ([48] TTL untouched)
+    mov     rdi, r13
+    call    reply_int
+    jmp     .ret
+.create:
+    mov     rdi, [rel argv_ptrs + 8]
+    mov     rsi, [rel argv_lens + 8]
+    mov     rdx, [rel argv_ptrs + 16]
+    mov     rcx, [rel argv_lens + 16]
+    xor     r8, r8
+    call    ks_set
+    test    rax, rax
+    jnz     .oom
+    mov     rdi, [rel argv_lens + 16] ; new length = value length
+    call    reply_int
+    jmp     .ret
+.wrongtype:
+    call    emit_wrongtype
+    jmp     .ret
+.oom:
+    call    emit_oom
+.ret:
+    pop     r13
+    pop     r12
+    pop     rbx
+    ret
+.wa:
+    lea     rdi, [rel lc_append]
+    mov     rsi, 6
+    sub     rsp, 8
+    call    emit_wrongargs
+    add     rsp, 8
+    ret
+
+; ---- STRLEN key -> :len ----
+cmd_strlen:
+    cmp     qword [rel argc], 2
+    jne     .wa
+    sub     rsp, 8
+    mov     rdi, [rel argv_ptrs + 8]
+    mov     rsi, [rel argv_lens + 8]
+    call    ks_lookup
+    test    rax, rax
+    jz      .zero
+    cmp     qword [rax+40], TYPE_STR
+    jne     .wrongtype
+    mov     rdi, [rax+32]
+    call    reply_int
+    add     rsp, 8
+    ret
+.zero:
+    xor     edi, edi
+    call    reply_int
+    add     rsp, 8
+    ret
+.wrongtype:
+    call    emit_wrongtype
+    add     rsp, 8
+    ret
+.wa:
+    lea     rdi, [rel lc_strlen]
+    mov     rsi, 6
+    sub     rsp, 8
+    call    emit_wrongargs
+    add     rsp, 8
+    ret
+
+; ---- MSET key value [key value ...] -> +OK ----  rbx=index
+cmd_mset:
+    mov     rax, [rel argc]
+    cmp     rax, 3
+    jb      .wa
+    test    rax, 1                  ; even argc -> incomplete pair
+    jz      .wa
+    push    rbx                     ; 1 push -> rsp%16==0
+    mov     rbx, 1
+.next:
+    cmp     rbx, [rel argc]
+    jae     .done
+    lea     rax, [rel argv_ptrs]
+    mov     rdi, [rax + rbx*8]
+    lea     rax, [rel argv_lens]
+    mov     rsi, [rax + rbx*8]
+    lea     rax, [rel argv_ptrs]
+    mov     rdx, [rax + rbx*8 + 8]
+    lea     rax, [rel argv_lens]
+    mov     rcx, [rax + rbx*8 + 8]
+    xor     r8, r8
+    call    ks_set
+    test    rax, rax
+    jnz     .oom
+    add     rbx, 2
+    jmp     .next
+.done:
+    lea     rdi, [rel s_ok]
+    mov     rsi, s_ok_len
+    call    reply_simple
+    pop     rbx
+    ret
+.oom:
+    call    emit_oom
+    pop     rbx
+    ret
+.wa:
+    lea     rdi, [rel lc_mset]
+    mov     rsi, 4
+    sub     rsp, 8
+    call    emit_wrongargs
+    add     rsp, 8
+    ret
+
+; ---- MGET key [key ...] -> array (nil for missing/wrong-type) ----  rbx=index
+cmd_mget:
+    cmp     qword [rel argc], 2
+    jb      .wa
+    push    rbx                     ; 1 push -> rsp%16==0
+    mov     rbx, [rel argc]
+    dec     rbx
+    mov     rdi, rbx
+    call    reply_array_header
+    mov     rbx, 1
+.next:
+    cmp     rbx, [rel argc]
+    jae     .done
+    lea     rax, [rel argv_ptrs]
+    mov     rdi, [rax + rbx*8]
+    lea     rax, [rel argv_lens]
+    mov     rsi, [rax + rbx*8]
+    call    ks_lookup
+    test    rax, rax
+    jz      .nil
+    cmp     qword [rax+40], TYPE_STR
+    jne     .nil
+    mov     rdi, [rax+24]
+    mov     rsi, [rax+32]
+    call    reply_bulk
+    jmp     .adv
+.nil:
+    call    reply_null
+.adv:
+    inc     rbx
+    jmp     .next
+.done:
+    pop     rbx
+    ret
+.wa:
+    lea     rdi, [rel lc_mget]
+    mov     rsi, 4
+    sub     rsp, 8
+    call    emit_wrongargs
+    add     rsp, 8
     ret
