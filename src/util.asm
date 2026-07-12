@@ -1,6 +1,6 @@
 %include "syscalls.inc"
 global atoi_port
-global itoa_u, memcmp_n, to_upper_buf
+global itoa_u, itoa_s, memcmp_n, to_upper_buf
 global fnv1a
 global parse_int
 
@@ -47,6 +47,23 @@ itoa_u:
     mov     rsi, r8              ; src  = first digit
     rep     movsb
     ret
+
+; itoa_s(rdi=signed value, rsi=out buf >=21) -> rax=length. Emits '-' for
+; negatives then the unsigned magnitude via itoa_u (INT64_MIN's magnitude is
+; 2^63 via unsigned negation, which itoa_u prints correctly). Calls itoa_u.
+itoa_s:
+    test    rdi, rdi
+    jns     .pos
+    mov     byte [rsi], '-'
+    neg     rdi                  ; magnitude
+    push    rsi                  ; save buf; 1 push -> aligned call
+    lea     rsi, [rsi+1]         ; digits go after the '-'
+    call    itoa_u               ; rax = digit length
+    pop     rsi
+    inc     rax                  ; + '-'
+    ret
+.pos:
+    jmp     itoa_u               ; tail call: rdi=value, rsi=buf
 
 ; memcmp_n: rdi=a, rsi=b, rdx=n -> rax=0 if equal, 1 if differ
 memcmp_n:

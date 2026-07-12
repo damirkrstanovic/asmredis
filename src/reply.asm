@@ -131,11 +131,19 @@ reply_null:                      ; -> "$-1\r\n"
     call    _put_bytes
     ret
 
-reply_int:                       ; rdi=value -> ":<n>\r\n"
+reply_int:                       ; rdi=signed value -> ":<n>\r\n"
     push    rdi
     mov     r8b, ':'
     call    _put_byte
     pop     rdi
+    test    rdi, rdi
+    jns     .mag
+    push    rdi                  ; same stack idiom as the ':' emit above
+    mov     r8b, '-'
+    call    _put_byte
+    pop     rdi
+    neg     rdi                  ; magnitude (INT64_MIN -> 2^63 unsigned, printed correctly)
+.mag:
     call    _put_uint
     call    _put_crlf
     ret
