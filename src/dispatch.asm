@@ -10,6 +10,7 @@ extern cmd_hset, cmd_hget, cmd_hdel, cmd_hgetall, cmd_hlen
 extern cmd_hexists, cmd_hkeys, cmd_hvals
 extern cmd_incr, cmd_decr, cmd_incrby, cmd_decrby
 extern cmd_expire, cmd_pexpire, cmd_expireat, cmd_pexpireat, cmd_ttl, cmd_pttl, cmd_persist
+extern cmd_sadd, cmd_srem, cmd_sismember, cmd_scard, cmd_smembers
 
 section .rodata
 s_pong:     db "PONG"
@@ -48,11 +49,17 @@ name_pexpire:   db "PEXPIRE"
 name_persist:   db "PERSIST"
 name_expireat:  db "EXPIREAT"
 name_pexpireat: db "PEXPIREAT"
+name_sadd:      db "SADD"
+name_srem:      db "SREM"
+name_scard:     db "SCARD"
+name_smembers:  db "SMEMBERS"
+name_sismember: db "SISMEMBER"
 lc_exists:    db "exists"
 lc_type:      db "type"
 t_string:     db "string"
 t_list:       db "list"
 t_hash:       db "hash"
+t_set:        db "set"
 t_none:       db "none"
 uk_pre:     db "-ERR unknown command '"
 uk_pre_len  equ $ - uk_pre
@@ -181,6 +188,18 @@ dispatch:
     call    memcmp_n
     test    rax, rax
     je      cmd_pttl
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_sadd]
+    mov     rdx, 4
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_sadd
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_srem]
+    mov     rdx, 4
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_srem
     jmp     emit_unknown
 .len3:
     lea     rdi, [rel cmd_upper]
@@ -233,6 +252,12 @@ dispatch:
     call    memcmp_n
     test    rax, rax
     je      cmd_hvals
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_scard]
+    mov     rdx, 5
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_scard
     jmp     emit_unknown
 .len6:
     lea     rdi, [rel cmd_upper]
@@ -299,6 +324,12 @@ dispatch:
     call    memcmp_n
     test    rax, rax
     je      cmd_expireat
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_smembers]
+    mov     rdx, 8
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_smembers
     jmp     emit_unknown
 .len9:
     lea     rdi, [rel cmd_upper]
@@ -307,6 +338,12 @@ dispatch:
     call    memcmp_n
     test    rax, rax
     je      cmd_pexpireat
+    lea     rdi, [rel cmd_upper]
+    lea     rsi, [rel name_sismember]
+    mov     rdx, 9
+    call    memcmp_n
+    test    rax, rax
+    je      cmd_sismember
     jmp     emit_unknown
 .done:
     ret
@@ -477,8 +514,16 @@ cmd_type:
     je      .str
     cmp     rax, TYPE_LIST
     je      .list
+    cmp     rax, TYPE_SET
+    je      .set
     lea     rdi, [rel t_hash]        ; TYPE_HASH
     mov     rsi, 4
+    call    reply_simple
+    add     rsp, 8
+    ret
+.set:
+    lea     rdi, [rel t_set]
+    mov     rsi, 3
     call    reply_simple
     add     rsp, 8
     ret
