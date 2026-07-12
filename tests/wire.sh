@@ -251,6 +251,33 @@ check SET ko v EX 100 PX 100
 check SET ko v NX XX
 check SET ko v BADOPT
 check SET ko v EX
+check DEL snk
+check SETNX snk v
+check SETNX snk w
+check GET snk
+check GETSET snk new
+check GET snk
+check DEL frs
+check GETSET frs v
+check DEL apk
+check APPEND apk hello
+check APPEND apk world
+check GET apk
+check STRLEN apk
+check STRLEN nokeyz
+check MSET ma 1 mb 2 mc 3
+check MGET ma mb nokeyz
+check GET ma
+check MSET ma 1 mb
+check RPUSH lst a
+check GETSET lst v
+check APPEND lst x
+check STRLEN lst
+check MGET ma lst nokeyz
+check SETNX
+check STRLEN
+check MGET
+check MSET
 kill $SRV 2>/dev/null
 valkey-cli -p 7778 shutdown nosave 2>/dev/null
 [ "$fail" = "0" ] && echo "PASS conformance" || { echo "FAIL conformance"; exit 1; }
@@ -442,3 +469,15 @@ fi
 kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
 
 [ $so -eq 0 ] || exit 1
+
+# --- Milestone L: string ops conformance ---
+./asmredis 7777 & SRV=$!
+for _i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/7777) 2>/dev/null && { exec 3>&- 3<&-; break; }; sleep 0.1; done
+if timeout 60 python3 tests/strops.py 7777 >/tmp/asml_strops.txt 2>&1; then
+  echo "PASS strops"; sp=0
+else
+  echo "FAIL strops: $(cat /tmp/asml_strops.txt)"; sp=1
+fi
+kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
+
+[ $sp -eq 0 ] || exit 1
