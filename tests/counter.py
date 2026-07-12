@@ -91,15 +91,41 @@ def counters(c):
     eq(c.do("INCRBY","k"), wa("incrby"), "incrby arity")
     eq(c.do("DECRBY","k"), wa("decrby"), "decrby arity")
 
+def generic(c):
+    # TYPE across the three types + none, and after INCR (string)
+    eq(c.do("SET","ts","v"), b"+OK", "set ts")
+    eq(c.do("TYPE","ts"), b"+string", "type string")
+    eq(c.do("DEL","tl"), b":0", "del tl")                 # tl absent -> :0
+    eq(c.do("RPUSH","tl","a"), b":1", "rpush tl")
+    eq(c.do("TYPE","tl"), b"+list", "type list")
+    eq(c.do("DEL","th"), b":0", "del th")                 # th absent -> :0
+    eq(c.do("HSET","th","f","v"), b":1", "hset th")
+    eq(c.do("TYPE","th"), b"+hash", "type hash")
+    eq(c.do("TYPE","nope"), b"+none", "type none")
+    eq(c.do("DEL","ic"), b":0", "del ic")                 # ic absent -> :0
+    eq(c.do("INCR","ic"), b":1", "incr ic")
+    eq(c.do("TYPE","ic"), b"+string", "type after incr")
+    # EXISTS: variadic, duplicates counted, missing skipped
+    eq(c.do("SET","e1","1"), b"+OK", "set e1")
+    eq(c.do("SET","e2","2"), b"+OK", "set e2")
+    eq(c.do("DEL","e3"), b":0", "del e3")                 # e3 absent -> :0
+    eq(c.do("EXISTS","e1","e2","e3","e1"), b":3", "exists variadic")
+    eq(c.do("EXISTS","absent"), b":0", "exists missing")
+    # arity
+    eq(c.do("EXISTS"), wa("exists"), "exists arity")
+    eq(c.do("TYPE"), wa("type"), "type arity0")
+    eq(c.do("TYPE","a","b"), wa("type"), "type arity2")
+
 def main():
     if len(sys.argv)<2: print("usage: counter.py <port>"); return 2
     port=int(sys.argv[1]); c=C(port)
     try:
         counters(c)
+        generic(c)
     except (EOFError,OSError,ValueError) as e:
         print("FAIL counter: %r"%e); return 1
     if FAILS:
         print("FAIL counter:"); [print("  "+f) for f in FAILS]; return 1
-    print("OK counter: INCR/DECR/INCRBY/DECRBY conformant"); return 0
+    print("OK counter: INCR/DECR/INCRBY/DECRBY + EXISTS/TYPE conformant"); return 0
 
 if __name__=="__main__": sys.exit(main())
