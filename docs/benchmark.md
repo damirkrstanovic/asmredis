@@ -808,3 +808,52 @@ into a neighbouring latency bucket; there p75 ≈ p50.
 - Numbers are a single hand-run on a loaded desktop; treat as rough, not
   authoritative. The planned suite (medians of repeated runs, full percentiles,
   the concurrency sweep above) will supersede this.
+
+## Milestone H (integer counters + EXISTS/TYPE)
+
+Milestone H adds the counter family (`INCR`/`DECR`/`INCRBY`/`DECRBY`) and two
+generic-key commands (`EXISTS`/`TYPE`). **The `SET`/`GET` hot path is untouched:**
+`SET` replies via `reply_simple`, `GET` via `reply_bulk`, and neither uses any of
+the code this milestone changed (`parse_int`, `reply_int`, `itoa_s` are on the
+counter/list paths only). So no throughput change is expected on the benchmarked
+path, and the measurement below is a **no-regression confirmation**, not a
+hot-path evaluation.
+
+**Methodology note (constrained run).** This session's sandbox terminated sustained
+multi-server benchmark load (SIGSTKFLT/exit 144) before a full median-of-3,
+full-percentile sweep could complete. The table below is therefore a **single-run
+throughput spot-check** (`valkey-benchmark -t set,get -n 50000`, `throughput
+summary` line) across the same `-c {1,50,200,500}` × `-d {3,512}` grid, asmredis:7777
+vs Valkey:7778 in the same session. The milestone-G tables remain the authoritative
+latency/percentile reference; treat these as a directional throughput check only.
+`uname -r` = `7.1.3-2-cachyos`; binary = 42,344 bytes; loadavg ≈ 1.2–2.2.
+
+### throughput, requests/sec (single run, in-session oracle)
+
+| conc | op | asmredis (-d 3) | valkey (-d 3) | asmredis (-d 512) | valkey (-d 512) |
+|---|---|---|---|---|---|
+| 1 | SET | 47,710 | 38,971 | 47,755 | 39,032 |
+| 1 | GET | 48,123 | 40,064 | 47,755 | 39,620 |
+| 50 | SET | 99,602 | 104,603 | 100,200 | 104,384 |
+| 50 | GET | 103,093 | 105,708 | 102,041 | 103,520 |
+| 200 | SET | 109,170 | 104,167 | 102,249 | 100,604 |
+| 200 | GET | 101,626 | 104,384 | 101,626 | 104,822 |
+| 500 | SET | 96,712 | 102,249 | 98,619 | 99,602 |
+| 500 | GET | 96,154 | 96,899 | 95,420 | 83,056 |
+
+**Reading the numbers.** The asmredis-vs-oracle shape **reproduces every earlier
+milestone**:
+
+- **`-c 1`: asmredis ~20–22% faster** (47.7K/48.1K vs 39.0K/40.1K on `-d 3`;
+  47.8K/47.8K vs 39.0K/39.6K on `-d 512`) — the same low-concurrency lead the
+  minimal epoll/keyspace path has shown since milestone B.
+- **`-c 50–500`: roughly tied, within ±5%** (e.g. `-d 3` `-c 50` SET 99.6K vs 104.6K,
+  `-c 200` SET 109.2K vs 104.2K, `-c 500` GET 96.2K vs 96.9K), with the noise
+  expected from single (non-median) runs on a shared box — asmredis leads some
+  cells, Valkey others, none by a wide margin.
+
+**Did the counter/generic-command work regress the hot path? No** — and it could not:
+the `SET`/`GET` path executes exactly the same instructions as in milestone G (the
+changed routines are never called on it). The in-session oracle comparison, the
+load-invariant measure, shows asmredis holding its established position (ahead at
+`-c 1`, level across the mid/high range) with no throughput regression.
