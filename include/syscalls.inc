@@ -10,6 +10,12 @@
 %define SYS_listen      50
 %define SYS_setsockopt  54
 %define SYS_exit        60
+%define SYS_rt_sigaction 13
+
+; ---- signals ----
+%define SIGPIPE         13           ; write to a broken pipe/socket
+%define SIG_IGN         1            ; ignore disposition (kernel sa_handler value)
+%define SIGSETSIZE      8            ; kernel sigset_t size on x86-64 (_NSIG/8)
 
 ; ---- socket constants ----
 %define AF_INET         2

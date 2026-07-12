@@ -12,6 +12,13 @@ banner_len:  equ $ - banner
 flag_banner: db "--banner"
 err_port:     db "invalid port (use 1-65535)", 10
 err_port_len: equ $ - err_port
+; struct kernel_sigaction for SIG_IGN: {sa_handler, sa_flags, sa_restorer, sa_mask}.
+; SIG_IGN never invokes user code, so no SA_RESTORER/restorer is required.
+align 8
+sa_ign:       dq SIG_IGN            ; sa_handler
+              dq 0                  ; sa_flags
+              dq 0                  ; sa_restorer
+              dq 0                  ; sa_mask (SIGSETSIZE bytes)
 
 section .text
 _start:
@@ -47,6 +54,14 @@ _start:
 .have_port:
     push    rdi                  ; preserve port across init calls
     sub     rsp, 8               ; keep rsp%16==0 at arena_init/ks_init calls
+    ; ignore SIGPIPE: a write to a peer-closed socket must return -EPIPE (handled
+    ; by _send's error path -> close_conn), not terminate the whole server.
+    mov     rax, SYS_rt_sigaction
+    mov     rdi, SIGPIPE
+    lea     rsi, [rel sa_ign]
+    xor     rdx, rdx             ; oldact = NULL
+    mov     r10, SIGSETSIZE
+    syscall
     call    arena_init           ; mmap the value arena
     call    ks_init              ; mmap the initial hashtable
     add     rsp, 8

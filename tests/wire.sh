@@ -278,3 +278,15 @@ fi
 kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
 
 [ $bg -eq 0 ] || exit 1
+
+# --- SIGPIPE hardening: broken-pipe write must not kill the server ---
+./asmredis 7777 & SRV=$!
+for _i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/7777) 2>/dev/null && { exec 3>&- 3<&-; break; }; sleep 0.1; done
+if timeout 60 python3 tests/sigpipe.py 7777 >/tmp/asm_sigpipe.txt 2>&1; then
+  echo "PASS sigpipe"; sp=0
+else
+  echo "FAIL sigpipe: $(cat /tmp/asm_sigpipe.txt)"; sp=1
+fi
+kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
+
+[ $sp -eq 0 ] || exit 1
