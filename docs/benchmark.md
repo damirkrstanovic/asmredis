@@ -896,3 +896,30 @@ asmredis ahead on several `-c 200`/`-c 500` cells, e.g. `-d 3` `-c 200` GET 107.
 milestone-H position (`-c 1` GET 46.6K here vs 48.1K in H, within session-load noise;
 Valkey moves with it), consistent with adding two register-only instructions off the
 syscall path. No regression.
+
+## Milestones J–M (Sets, SET options, string ops, SCAN)
+
+These milestones add commands only; the plain `SET`/`GET` hot path is unchanged
+(milestone K moved `cmd_set` to `string.asm` but its argc==3 fast path is byte-
+identical; `GET` is untouched). A single-run spot-check on the current `main`
+confirms no regression. Same constrained-sandbox methodology as milestones H/I
+(single run, `-n 50000`, script-file harness, `throughput summary` line).
+`uname -r` = `7.1.3-2-cachyos`; binary = 62,056 bytes; loadavg ≈ 1–2.
+
+### throughput, requests/sec (single run, in-session oracle)
+
+| conc | op | asmredis (-d 3) | valkey (-d 3) | asmredis (-d 512) | valkey (-d 512) |
+|---|---|---|---|---|---|
+| 1 | SET | 48,123 | 40,355 | 47,893 | 40,717 |
+| 1 | GET | 48,170 | 41,528 | 47,081 | 40,950 |
+| 50 | SET | 100,806 | 110,132 | 99,404 | 109,890 |
+| 50 | GET | 108,460 | 106,157 | 97,847 | 105,932 |
+| 200 | SET | 101,215 | 104,167 | 101,626 | 102,249 |
+| 200 | GET | 100,000 | 105,042 | 107,527 | 103,093 |
+| 500 | SET | 94,697 | 99,010 | 101,626 | 101,010 |
+| 500 | GET | 103,093 | 105,263 | 104,167 | 102,249 |
+
+**Reading.** The asmredis-vs-oracle shape is unchanged from milestones B–I:
+`-c 1` asmredis ~15–19 % faster (48K vs 40–41K), `-c 50` Valkey ~8–10 % ahead on
+SET, `-c 200–500` a ±5 % tie. Adding Sets / SET-options / string-ops / SCAN did
+not move the GET/SET path, as expected.
